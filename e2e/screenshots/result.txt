@@ -1,0 +1,47 @@
+PASS wrong password is refused with a clear message
+PASS sign-in with the form works
+PASS sign-out works
+PASS a team member has no Team page and no company-wide overview
+PASS opening /team by link sends a non-director home
+PASS Legal sees only projects that reached or involved Legal (6 of 15)
+PASS a project that is not theirs cannot be opened even with the link
+PASS a Director sees all projects, the stage overview and the Team page
+PASS notification centre opens
+PASS overdue steps escalated to the manager (2 escalation(s) for the India Director)
+PASS Directors see a 'Running late' list
+PASS new project validated and created (Development)
+PASS initiator steps done in the UI: screening → director approval → code → Master Excel → submission
+PASS India review → Send back (reason required) loops to Internal Review
+PASS clarification request loops back and tells the initiator
+PASS after clarification the brief returns to 'Updated Project Brief Received' (no second review)
+PASS feasibility → Hold pauses the project; a Director restarts it from the menu
+PASS Final Commercial Approval needs both Directors: first approval is recorded, project waits for the second
+PASS Final Commercial Approval → Hold/Reject loops back to Financial Review
+PASS Legal / Quality / PV review: each team signs separately
+PASS CDMO step asks which CDMO/CRO is confirmed before it can be completed
+PASS Regulatory decision → Hold/Reject loops back to dossier preparation
+PASS Concept / Artwork approval → Hold/Reject loops back to Concept Development
+PASS Development project completed through the UI, every step done by its responsible person
+PASS new project created (In-Licence)
+PASS In-Licence project completed through the UI (uses Regulatory Review, not CDMO)
+PASS Director rejects at the first decision: project closes, no code is issued, initiator sees the reason
+PASS initiator is notified of the rejection
+PASS initiator can send a reminder to the person a project is waiting for
+PASS reminders are limited (no spamming)
+PASS the owner gets the reminder; clicking it opens the project
+PASS notifications can be marked read
+PASS notes can be posted
+PASS files can be added and downloaded
+PASS files can be removed
+PASS initiator can edit project details
+PASS project Excel download works
+PASS a Director can cancel a project (reason required)
+PASS admin has nothing to approve ('Needs me' is empty)
+PASS search works
+PASS Master Excel download works
+PASS projects can be added from Excel
+PASS admin adds a person and places them in the reporting line
+PASS admin can switch a person off; they can no longer sign in
+PASS a person can change their own password
+PASS Process map shows the flow chart, highlights my steps, and switches between Development and In-Licence
+PASS on a phone: open task, tap the big button, bottom tabs work, no sideways scrolling

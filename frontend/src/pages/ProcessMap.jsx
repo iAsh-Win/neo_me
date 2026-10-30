@@ -40,7 +40,7 @@ export default function ProcessMap() {
           <span />Highlight my steps
         </label>
       )}
-      <FlowMap steps={steps} mode="guide" highlightRole={mine ? user.role : null} />
+      <FlowMap steps={steps} groups={def.groups} mode="guide" highlightRole={mine ? user.role : null} />
     </div>
   )
 }

@@ -1,7 +1,8 @@
 # Neo Project Flow
 
 A simple web system that runs the **Neo Project Management Flow Chart (AD001-F01-00)** from the first idea to final
-dispatch: who is responsible, what is waiting, approvals, loops, files and notes – in one place.
+dispatch: who is responsible, what is waiting, approvals, send-backs, documents and links, tasks, deadline requests
+and a full history – in one place.
 
 Stack: **FastAPI** + **SQLite** (backend) · **Vite + React** (frontend).
 
@@ -40,7 +41,7 @@ The sign-in page lists all demo people; click one. Password for all: `neo@123`.
 | Rakesh Gowda | CMO (manufacturer) | – |
 | Sneha Kulkarni | Office Admin (manages people, cannot approve) | – |
 
-15 demo projects sit at different points of the flow. Each person sees only the projects that are theirs
+16 demo projects sit at different points of the flow, with files and links attached, a step sent back, a pending request for more time, tasks, and one project running in parallel (Fast track). Each person sees only the projects that are theirs
 (see AUDIT.md section 3) – sign in as different people to see the difference.
 
 ## Settings (environment variables)
@@ -58,8 +59,8 @@ If an older (version 1) database is found it is kept as `neo.old-<date>.db` and 
 ## Tests
 
 ```
-cd backend && python -m pytest          # 38 tests – flow, visibility, hierarchy, reminders, e-mail, security
-NEO_URL=http://localhost:8090 python e2e/ui_journey.py   # 47 browser checks (Playwright + Edge, fresh database)
+cd backend && python -m pytest          # 58 tests – flow, send-back, documents, parallel tracks, requests, tasks, visibility, e-mail, security
+NEO_URL=http://localhost:8090 python e2e/ui_journey.py   # 34 browser checks, whole projects clicked through (Playwright + Edge, fresh database)
 ```
 
 See **[AUDIT.md](AUDIT.md)** for the requirement-by-requirement check, and **[docs/WORKFLOW_RESEARCH.md](docs/WORKFLOW_RESEARCH.md)**

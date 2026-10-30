@@ -85,3 +85,16 @@ Searches on approval-workflow and enterprise UX (sources below) – findings and
 | Many approvals happen on phones | [ONES](https://ones.com/blog/?p=1123684) | 56 px buttons, bottom tab bar, tested at 390 px |
 
 **Not found in public sources:** guidance specific to low-digital-literacy users, and escalation tiers/notification cadence. These parts (plain-language labels, one-question dialogs, reminder at deadline then manager escalation after one more period) are design decisions documented in AUDIT.md sections 4–5, to be confirmed with the client.
+
+## 6. Version 3 research: what a pharma project needs beyond notes
+
+| Topic | Finding | Source | Built as |
+|---|---|---|---|
+| Stage deliverables | Each stage/gate has discrete deliverables turned into a checklist that drives the schedule; PDA TR 65 gives a deliverables matrix | [ISPE](https://www.ispeboston.org/download/educational_presentations/2010/2010-01-26-Scale-Up-and-Tech-Transfer-JSocolow.pdf), [PDA TR65](https://www.pda.org/bookstore/product-detail/6680-tr-65-revised-technology-transfer) | Documents, details and ticks per step (shown on the Process map) |
+| Regulatory evidence (Australia) | GMP evidence for each manufacturer; CTD dossier; online application | [TGA OTC process](https://www.tga.gov.au/sites/default/files/otc-new-medicines-registration-process.pdf) | GMP evidence + Dossier (CTD) slots; submission number, date and receipt |
+| Artwork speed | Artwork approval delays time to market; right-first-time | [Freyr](https://www.freyrsolutions.com/blog/crafting-high-quality-regulatory-artwork-strategies-for-achieving-right-first-time-capabilities), [ManageArtworks](https://manageartworks.com/blog-post/diving-into-the-intricacies-of-pharma-artwork-management) | Artwork runs beside the dossier under Fast track |
+| Agreements | Responsibilities (e.g. stability) must be written down or both OTC sponsor and CMO can be cited; quality agreement with the CDMO | [Contract Pharma](https://www.contractpharma.com/considerations-when-outsourcing-stability-testing-307082) | Three agreement slots: supplier, quality, PV |
+| Time-extension requests | Request early, give reason and a new date, route to a named approver, notify the decision; remind approvers | [ZenQMS](https://support.zenqms.com/hc/en-us/articles/360024189934-Requesting-a-Due-Date-Extension-for-an-Issue-Record-Stage-Task), [SSW](https://www.ssw.com.au/rules-beta/do-you-timebox-approval-requests) | "Ask for more time" → the person who gave the date |
+| Approval UX | Show the current task and next action; branching shown without overwhelming | [ONES](https://ones.com/blog/?p=1123684), [Oracle](https://docs.oracle.com/cd/F14158_13/books/BusProcFramework/guidelines-and-techniques-for-developing-a-task-ui.html) | One "Your turn" card, "Next:" line |
+
+**Not found in public sources:** which pharma activities may overlap (concurrent engineering) in OTC development; escalation tiers. The parallel tracks (AUDIT section 4) are derived from the chart's own structure (independent teams and outputs, separate loops) and are **off by default**; please confirm them with the client.

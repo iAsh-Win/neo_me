@@ -12,7 +12,7 @@ UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 
 DATABASE_URL = os.environ.get("NEO_DATABASE_URL", f"sqlite:///{DATA_DIR / 'neo.db'}")
 
-engine = create_engine(DATABASE_URL, connect_args={"check_same_thread": False})
+engine = create_engine(DATABASE_URL, connect_args={"check_same_thread": False, "timeout": 30})
 
 
 @event.listens_for(engine, "connect")
@@ -39,7 +39,7 @@ def get_db():
 
 
 def backup_legacy_database() -> str | None:
-    """Earlier demo builds used a different table layout. If such a file is found, keep it as a backup
+    """Earlier builds used a different table layout. If such a file is found, keep it as a backup
     and let the app start fresh (the first version only held demo data)."""
     from datetime import datetime
 
@@ -49,7 +49,7 @@ def backup_legacy_database() -> str | None:
     insp = inspect(engine)
     if not insp.has_table("users"):
         return None
-    if "manager_id" in {c["name"] for c in insp.get_columns("users")}:
+    if insp.has_table("step_runs"):
         return None
     engine.dispose()
     src = DATA_DIR / "neo.db"
@@ -59,3 +59,23 @@ def backup_legacy_database() -> str | None:
         if f.exists():
             f.replace(Path(str(dst) + suffix))
     return str(dst)
+
+
+def ensure_columns() -> None:
+    """Add columns introduced after a database was first created (SQLite keeps old data as it is)."""
+    from sqlalchemy import inspect, text
+    insp = inspect(engine)
+    with engine.begin() as conn:
+        for table in Base.metadata.sorted_tables:
+            if not insp.has_table(table.name):
+                continue
+            have = {c["name"] for c in insp.get_columns(table.name)}
+            for col in table.columns:
+                if col.name in have:
+                    continue
+                kind = col.type.compile(engine.dialect)
+                default = ""
+                if isinstance(col.default, type(None)) is False and getattr(col.default, "is_scalar", False):
+                    v = col.default.arg
+                    default = f" DEFAULT {int(v) if isinstance(v, bool) else repr(v)}" if isinstance(v, (bool, int, float, str)) else ""
+                conn.execute(text(f'ALTER TABLE {table.name} ADD COLUMN {col.name} {kind}{default}'))

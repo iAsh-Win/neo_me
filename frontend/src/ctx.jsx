@@ -9,6 +9,7 @@ export function AppProvider({ children }) {
   const [user, setUser] = useState(null)
   const [ready, setReady] = useState(!getToken())
   const [def, setDef] = useState(null)
+  const [loadError, setLoadError] = useState('')
   const [toasts, setToasts] = useState([])
 
   const toast = useCallback((text, tone = 'ok') => {
@@ -26,7 +27,10 @@ export function AppProvider({ children }) {
   useEffect(() => {
     if (!getToken()) return
     loadSession()
-      .catch(() => setToken(null))
+      .catch((e) => {
+        if (e.status === 401) setToken(null)            // only a really invalid session signs you out
+        else setLoadError(e.message)
+      })
       .finally(() => setReady(true))
   }, [loadSession])
 
@@ -51,7 +55,8 @@ export function AppProvider({ children }) {
     const phases = Object.fromEntries((def?.phases || []).map((p) => [p.key, p]))
     const oversight = ['admin', 'otc_director', 'india_director'].includes(user?.role)
     const canAdd = ['initiator', 'admin'].includes(user?.role)
-    return { user, ready, def, roles, phases, oversight, canAdd, login, logout, toast, reload: loadSession }
+    const retry = () => { setLoadError(''); setReady(false); loadSession().catch((e) => { if (e.status === 401) setToken(null); else setLoadError(e.message) }).finally(() => setReady(true)) }
+    return { user, ready, def, roles, phases, oversight, canAdd, login, logout, toast, reload: loadSession, loadError, retry }
   }, [user, ready, def, toast, loadSession]) // eslint-disable-line
 
   return (

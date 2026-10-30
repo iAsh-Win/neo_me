@@ -1,7 +1,7 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { Download, FileSpreadsheet, Hammer, Handshake } from 'lucide-react'
-import { api, fileUrl } from './api'
+import { Hammer, Handshake } from 'lucide-react'
+import { api } from './api'
 import { useApp } from './ctx'
 import { Field, Modal } from './ui'
 
@@ -86,61 +86,6 @@ export function NewProject({ onClose }) {
       <Field label="Short description">
         <textarea rows={3} value={f.description} onChange={set('description')} placeholder="What is the product?" />
       </Field>
-      {error && <p className="form-error" role="alert">{error}</p>}
-    </Modal>
-  )
-}
-
-export function ImportExcel({ onClose, onDone }) {
-  const { user, toast } = useApp()
-  const [file, setFile] = useState(null)
-  const initiators = useInitiators(user.role === 'admin')
-  const [ini, setIni] = useState('')
-  const [error, setError] = useState('')
-  const [busy, setBusy] = useState(false)
-  const input = useRef()
-
-  const go = async () => {
-    if (!file) return setError('Please choose the Excel file first.')
-    setBusy(true)
-    setError('')
-    const form = new FormData()
-    form.append('file', file)
-    if (ini) form.append('initiator_id', ini)
-    try {
-      const r = await api.upload('/api/projects/import', form)
-      toast(`${r.created} project${r.created === 1 ? '' : 's'} added`)
-      onDone()
-    } catch (e) {
-      setError(e.message)
-      setBusy(false)
-    }
-  }
-  return (
-    <Modal
-      title="Add projects from Excel"
-      onClose={onClose}
-      footer={
-        <>
-          <button className="btn" onClick={onClose}>Cancel</button>
-          <button className="btn primary" onClick={go} disabled={busy}>{busy ? 'Adding…' : 'Add projects'}</button>
-        </>
-      }
-    >
-      <a className="btn block" href={fileUrl('/api/projects/import-template.xlsx')}><Download size={17} /> 1 · Download the Excel template</a>
-      {user.role === 'admin' && (
-        <Field label="Project Initiator for these projects">
-          <select value={ini} onChange={(e) => setIni(e.target.value)}>
-            <option value="">Choose…</option>
-            {initiators.map((i) => <option key={i.id} value={i.id}>{i.name}</option>)}
-          </select>
-        </Field>
-      )}
-      <button className="dropzone" onClick={() => input.current.click()}>
-        <FileSpreadsheet size={28} strokeWidth={1.5} />
-        <b>{file ? file.name : '2 · Choose your filled Excel file'}</b>
-      </button>
-      <input ref={input} type="file" accept=".xlsx" hidden onChange={(e) => setFile(e.target.files[0] || null)} />
       {error && <p className="form-error" role="alert">{error}</p>}
     </Modal>
   )

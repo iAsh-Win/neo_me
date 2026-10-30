@@ -1,10 +1,10 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
-import { Download, FileUp, Plus, Search } from 'lucide-react'
-import { api, fileUrl } from '../api'
+import { Plus, Search } from 'lucide-react'
+import { api } from '../api'
 import { useApp } from '../ctx'
 import { AvatarStack, DuePill, Empty, ErrorNote, JourneyDots, PhaseTile, Spinner, StatusPill } from '../ui'
-import { ImportExcel, NewProject } from '../modals'
+import { NewProject } from '../modals'
 
 const TABS = [
   ['active', 'In progress'],
@@ -32,7 +32,6 @@ export default function Projects() {
   const [list, setList] = useState(null)
   const [err, setErr] = useState('')
   const [adding, setAdding] = useState(false)
-  const [importing, setImporting] = useState(false)
   const load = () => api.get('/api/projects').then(setList).catch((e) => setErr(e.message))
   useEffect(() => { load() }, [])
   const setParam = (k, v) => {
@@ -57,8 +56,6 @@ export default function Projects() {
       <div className="page-head">
         <h1>Projects</h1>
         <div className="head-actions">
-          <a className="btn" href={fileUrl('/api/projects/export.xlsx')} aria-label="Download Master Excel" title="Download Master Excel"><Download size={18} /> <span>Excel</span></a>
-          {canAdd && <button className="btn" aria-label="Add projects from Excel" title="Add projects from Excel" onClick={() => setImporting(true)}><FileUp size={18} /> <span>Import</span></button>}
           {canAdd && <button className="btn primary" onClick={() => setAdding(true)}><Plus size={19} /> New project</button>}
         </div>
       </div>
@@ -96,7 +93,7 @@ export default function Projects() {
               </span>
             </div>
             <JourneyDots phases={def.phases} current={p.phase} status={p.status} />
-            <div className="pcard-step">{p.step_name}</div>
+            <div className="pcard-step">{p.active.length > 1 ? `${p.active.length} steps side by side` : p.step_name}</div>
             <div className="pcard-foot">
               {p.waiting.length > 0 ? <AvatarStack names={p.waiting.flatMap((w) => w.people)} size={26} /> : <span />}
               <span className="pcard-pills"><DuePill project={p} /><StatusPill project={p} /></span>
@@ -105,7 +102,6 @@ export default function Projects() {
         ))}
       </div>
       {adding && <NewProject onClose={() => setAdding(false)} />}
-      {importing && <ImportExcel onClose={() => setImporting(false)} onDone={() => { setImporting(false); load() }} />}
     </div>
   )
 }

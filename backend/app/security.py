@@ -12,6 +12,9 @@ from .db import DATA_DIR, get_db
 from .models import User
 
 
+ITER = int(os.environ.get("NEO_PBKDF2_ITER", "120000"))
+
+
 def _secret() -> str:
     env = os.environ.get("NEO_SECRET")
     if env:
@@ -24,7 +27,7 @@ def _secret() -> str:
 
 def hash_password(pw: str) -> str:
     salt = secrets.token_hex(8)
-    h = hashlib.pbkdf2_hmac("sha256", pw.encode(), salt.encode(), 120_000).hex()
+    h = hashlib.pbkdf2_hmac("sha256", pw.encode(), salt.encode(), ITER).hex()
     return f"{salt}${h}"
 
 
@@ -33,7 +36,7 @@ def verify_password(pw: str, stored: str) -> bool:
         salt, h = stored.split("$")
     except ValueError:
         return False
-    test = hashlib.pbkdf2_hmac("sha256", pw.encode(), salt.encode(), 120_000).hex()
+    test = hashlib.pbkdf2_hmac("sha256", pw.encode(), salt.encode(), ITER).hex()
     return hmac.compare_digest(test, h)
 
 

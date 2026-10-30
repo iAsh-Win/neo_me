@@ -1,6 +1,5 @@
 import asyncio
 import os
-import re
 import time
 import uuid
 from contextlib import asynccontextmanager
@@ -9,29 +8,28 @@ from pathlib import Path
 
 from fastapi import Depends, FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.exceptions import RequestValidationError
-from fastapi.responses import FileResponse, JSONResponse, Response
+from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from . import engine as eng
-from . import excel, mailer, views
+from . import mailer, views
 from . import workflow as wf
-from .db import BASE_DIR, UPLOAD_DIR, Base, SessionLocal, backup_legacy_database, get_db
+from .db import BASE_DIR, UPLOAD_DIR, Base, SessionLocal, backup_legacy_database, ensure_columns, get_db
 from .db import engine as db_engine
 from .models import Document, Notification, Project, User
 from .security import current_user, hash_password, make_token, verify_password
 
 MAX_UPLOAD = 20 * 1024 * 1024
-XLSX = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 BLOCKED_EXT = {".exe", ".bat", ".cmd", ".com", ".scr", ".js", ".vbs", ".msi", ".ps1", ".sh"}
 
 
 def _background():
-    """Hourly: remind / escalate overdue steps. Every 20 s: send queued e-mails (when SMTP is configured)."""
+    """Hourly: remind / escalate overdue work. Every 20 s: send queued e-mails (when SMTP is configured)."""
     async def loop():
-        last_remind = 0.0
+        last_remind = time.time()          # start-up already ran the check once
         while True:
             await asyncio.sleep(20)
             try:
@@ -50,6 +48,7 @@ def _background():
 async def lifespan(app):
     backup_legacy_database()
     Base.metadata.create_all(db_engine)
+    ensure_columns()
     with SessionLocal() as db:
         if not db.scalar(select(User).limit(1)) and os.environ.get("NEO_AUTOSEED", "1") == "1":
             from .seed import seed
@@ -181,8 +180,17 @@ def _check_manager(db: Session, uid: int | None, manager_id: int | None):
 
 @app.get("/api/users")
 def users(db: Session = Depends(get_db), user: User = Depends(current_user)):
-    _oversight(user)
-    return [views.user_full(u) for u in db.scalars(select(User).order_by(User.name))]
+    """Directors and the Office Admin see everyone. Others get only the people they may give tasks to."""
+    if user.role == "admin" or user.role in eng.DIRECTORS:
+        return [views.user_full(u) for u in db.scalars(select(User).order_by(User.name))]
+    raise HTTPException(403, "This page is for the Directors and the Office Admin.")
+
+
+@app.get("/api/people")
+def people(db: Session = Depends(get_db), user: User = Depends(current_user)):
+    """Names to choose from when giving someone a task (no e-mails, no admin)."""
+    return [views.user_brief(u) for u in db.scalars(select(User).where(User.active == True, User.role != "admin")  # noqa: E712
+                                                    .order_by(User.name))]
 
 
 @app.post("/api/users")
@@ -250,15 +258,80 @@ class ProjectEdit(BaseModel):
     initiator_id: int | None = None
 
 
+class Next(BaseModel):
+    assignee_id: int | None = None
+    due: str | None = None
+
+
 class Act(BaseModel):
     option: str | None = None
     note: str = ""
-    text: str | None = None
+    data: dict = {}
+    checks: list[str] = []
+    nexts: dict[str, Next] = {}
+
+
+class SendBack(BaseModel):
+    target: str
+    note: str = ""
+    doc_ids: list[int] = []
+    assignee_id: int | None = None
+    due: str | None = None
+
+
+class Assign(BaseModel):
+    assignee_id: int | None = None
+
+
+class Attach(BaseModel):
+    doc_ids: list[int]
+    step_key: str = ""
+    doc_type: str = ""
+    task_id: int | None = None
+
+
+class Important(BaseModel):
+    on: bool
+
+
+class TimeAsk(BaseModel):
+    new_due: str
+    reason: str = ""
+
+
+class Decide(BaseModel):
+    approve: bool
+    note: str = ""
+
+
+class DueSet(BaseModel):
+    due: str
+    note: str = ""
 
 
 class Note(BaseModel):
     note: str = ""
     step_key: str = ""
+
+
+class LinkIn(BaseModel):
+    title: str = ""
+    url: str
+    step_key: str = ""
+    doc_type: str = ""
+
+
+class TaskIn(BaseModel):
+    title: str
+    assignee_id: int
+    due: str
+    details: str = ""
+    step_key: str = ""
+    blocking: bool = False
+
+
+class Toggle(BaseModel):
+    on: bool
 
 
 @app.get("/api/projects")
@@ -271,38 +344,6 @@ def list_projects(db: Session = Depends(get_db), user: User = Depends(current_us
 def create_project(body: ProjectIn, db: Session = Depends(get_db), user: User = Depends(current_user)):
     p = eng.create_project(db, user, body.model_dump())
     return views.detail(db, p, user)
-
-
-@app.get("/api/projects/export.xlsx")
-def export_master(db: Session = Depends(get_db), user: User = Depends(current_user)):
-    dirx = views.directory(db)
-    ps = sorted(views.visible_projects(db, user), key=lambda p: p.id)
-    data = excel.master_workbook([views.summary(p, user, dirx) for p in ps])
-    return Response(data, media_type=XLSX,
-                    headers={"Content-Disposition": 'attachment; filename="Neo-Master-Projects.xlsx"'})
-
-
-@app.get("/api/projects/import-template.xlsx")
-def import_template(_: User = Depends(current_user)):
-    return Response(excel.import_template(), media_type=XLSX,
-                    headers={"Content-Disposition": 'attachment; filename="Neo-Opportunities-Template.xlsx"'})
-
-
-@app.post("/api/projects/import")
-async def import_projects(file: UploadFile = File(...), initiator_id: int | None = Form(None),
-                          db: Session = Depends(get_db), user: User = Depends(current_user)):
-    if user.role not in ("initiator", "admin"):
-        raise HTTPException(403, "Only a Project Initiator can add projects.")
-    try:
-        rows = excel.parse_import(await file.read())
-    except ValueError as e:
-        raise HTTPException(400, str(e))
-    except Exception:
-        raise HTTPException(400, "This does not look like the Neo template. Please download the template and try again.")
-    if not rows:
-        raise HTTPException(400, "No rows found in the file.")
-    created = [eng.create_project(db, user, {**r, "initiator_id": initiator_id}) for r in rows]
-    return {"created": len(created)}
 
 
 @app.get("/api/projects/{pid}")
@@ -333,11 +374,83 @@ def edit_project(pid: int, body: ProjectEdit, db: Session = Depends(get_db), use
     return views.detail(db, p, user)
 
 
-@app.post("/api/projects/{pid}/act")
-def act(pid: int, body: Act, db: Session = Depends(get_db), user: User = Depends(current_user)):
+@app.post("/api/projects/{pid}/runs/{rid}/act")
+def act(pid: int, rid: int, body: Act, db: Session = Depends(get_db), user: User = Depends(current_user)):
     p = _project(db, pid, user)
-    result = eng.act(db, p, user, option=body.option, note=body.note, text=body.text)
+    result = eng.act(db, p, user, rid, option=body.option, note=body.note, data=body.data, checks=body.checks,
+                     nexts={k: v.model_dump() for k, v in body.nexts.items()})
     return {**result, "project": views.detail(db, p, user)}
+
+
+@app.post("/api/projects/{pid}/runs/{rid}/sendback")
+def send_back(pid: int, rid: int, body: SendBack, db: Session = Depends(get_db), user: User = Depends(current_user)):
+    p = _project(db, pid, user)
+    result = eng.send_back(db, p, user, rid, body.target, body.note, body.doc_ids, assignee_id=body.assignee_id,
+                           due=body.due)
+    return {**result, "project": views.detail(db, p, user)}
+
+
+@app.post("/api/projects/{pid}/runs/{rid}/assign")
+def assign(pid: int, rid: int, body: Assign, db: Session = Depends(get_db), user: User = Depends(current_user)):
+    p = _project(db, pid, user)
+    eng.reassign_run(db, p, user, rid, body.assignee_id)
+    return views.detail(db, p, user)
+
+
+@app.post("/api/projects/{pid}/runs/{rid}/extend")
+def ask_time(pid: int, rid: int, body: TimeAsk, db: Session = Depends(get_db), user: User = Depends(current_user)):
+    p = _project(db, pid, user)
+    req = eng.request_time(db, p, user, run_id=rid, new_due=body.new_due, reason=body.reason)
+    return {"message": f"Request sent to {req.approver.name}.", "project": views.detail(db, p, user)}
+
+
+@app.post("/api/projects/{pid}/runs/{rid}/due")
+def change_due(pid: int, rid: int, body: DueSet, db: Session = Depends(get_db), user: User = Depends(current_user)):
+    p = _project(db, pid, user)
+    eng.set_due(db, p, user, rid, body.due, body.note)
+    return views.detail(db, p, user)
+
+
+@app.post("/api/projects/{pid}/runs/{rid}/nudge")
+def nudge(pid: int, rid: int, db: Session = Depends(get_db), user: User = Depends(current_user)):
+    p = _project(db, pid, user)
+    msg = eng.nudge(db, p, user, rid)
+    return {"message": msg, "project": views.detail(db, p, user)}
+
+
+@app.post("/api/projects/{pid}/requests/{qid}/decide")
+def decide(pid: int, qid: int, body: Decide, db: Session = Depends(get_db), user: User = Depends(current_user)):
+    p = _project(db, pid, user)
+    eng.decide_request(db, p, user, qid, body.approve, body.note)
+    return views.detail(db, p, user)
+
+
+@app.post("/api/projects/{pid}/tasks")
+def new_task(pid: int, body: TaskIn, db: Session = Depends(get_db), user: User = Depends(current_user)):
+    p = _project(db, pid, user)
+    t = eng.create_task(db, p, user, body.title, body.assignee_id, body.due, body.details, body.step_key, body.blocking)
+    return {**views.detail(db, p, user), "new_task_id": t.id}
+
+
+@app.post("/api/projects/{pid}/tasks/{tid}/done")
+def task_done(pid: int, tid: int, body: Note, db: Session = Depends(get_db), user: User = Depends(current_user)):
+    p = _project(db, pid, user)
+    eng.complete_task(db, p, user, tid, body.note)
+    return views.detail(db, p, user)
+
+
+@app.post("/api/projects/{pid}/tasks/{tid}/cancel")
+def task_cancel(pid: int, tid: int, db: Session = Depends(get_db), user: User = Depends(current_user)):
+    p = _project(db, pid, user)
+    eng.cancel_task(db, p, user, tid)
+    return views.detail(db, p, user)
+
+
+@app.post("/api/projects/{pid}/tasks/{tid}/extend")
+def task_ask_time(pid: int, tid: int, body: TimeAsk, db: Session = Depends(get_db), user: User = Depends(current_user)):
+    p = _project(db, pid, user)
+    req = eng.request_time(db, p, user, task_id=tid, new_due=body.new_due, reason=body.reason)
+    return {"message": f"Request sent to {req.approver.name}.", "project": views.detail(db, p, user)}
 
 
 @app.post("/api/projects/{pid}/comments")
@@ -345,13 +458,6 @@ def comment(pid: int, body: Note, db: Session = Depends(get_db), user: User = De
     p = _project(db, pid, user)
     eng.add_comment(db, p, user, body.note)
     return views.detail(db, p, user)
-
-
-@app.post("/api/projects/{pid}/nudge")
-def nudge(pid: int, db: Session = Depends(get_db), user: User = Depends(current_user)):
-    p = _project(db, pid, user)
-    msg = eng.nudge(db, p, user)
-    return {"message": msg, "project": views.detail(db, p, user)}
 
 
 @app.post("/api/projects/{pid}/hold")
@@ -382,40 +488,82 @@ def move(pid: int, body: Note, db: Session = Depends(get_db), user: User = Depen
     return views.detail(db, p, user)
 
 
-@app.get("/api/projects/{pid}/brief.xlsx")
-def brief(pid: int, db: Session = Depends(get_db), user: User = Depends(current_user)):
+@app.post("/api/projects/{pid}/fasttrack")
+def fast_track(pid: int, body: Toggle, db: Session = Depends(get_db), user: User = Depends(current_user)):
     p = _project(db, pid, user)
-    name = re.sub(r"[^A-Za-z0-9]+", "-", p.code or p.title).strip("-")
-    return Response(excel.brief_workbook(views.detail(db, p, user)), media_type=XLSX,
-                    headers={"Content-Disposition": f'attachment; filename="Brief-{name}.xlsx"'})
-
-
-# ---- files --------------------------------------------------------------------
-@app.post("/api/projects/{pid}/documents")
-async def upload(pid: int, file: UploadFile = File(...), step_key: str = Form(""),
-                 db: Session = Depends(get_db), user: User = Depends(current_user)):
-    p = _project(db, pid, user)
-    name = Path(file.filename or "file").name
-    if Path(name).suffix.lower() in BLOCKED_EXT:
-        raise HTTPException(400, "This type of file is not allowed.")
-    data = await file.read()
-    if not data:
-        raise HTTPException(400, "That file is empty.")
-    if len(data) > MAX_UPLOAD:
-        raise HTTPException(400, "File is too large (limit 20 MB).")
-    if step_key and step_key not in wf.STEP_BY_KEY:
-        raise HTTPException(400, "Unknown step.")
-    stored = uuid.uuid4().hex + Path(name).suffix[:10]
-    (UPLOAD_DIR / stored).write_bytes(data)
-    eng.add_document(db, p, user, name, stored, len(data), step_key)
+    eng.set_fast_track(db, p, user, body.on)
     return views.detail(db, p, user)
+
+
+# ---- files and links --------------------------------------------------------------
+@app.post("/api/projects/{pid}/documents")
+async def upload(pid: int, files: list[UploadFile] = File(default=[]), step_key: str = Form(""), doc_type: str = Form(""),
+                 title: str = Form(""), url: str = Form(""), task_id: int | None = Form(None),
+                 db: Session = Depends(get_db), user: User = Depends(current_user)):
+    """A document = a name + a file, a link, or both. Several files at once get their own file names."""
+    p = _project(db, pid, user)
+    files = [f for f in files if f.filename]
+    if not files and not url.strip():
+        raise HTTPException(400, "Please choose a file or paste a link.")
+    eng._clean_url(url)
+    prepared = []
+    for file in files:
+        name = Path(file.filename or "file").name
+        if Path(name).suffix.lower() in BLOCKED_EXT:
+            raise HTTPException(400, f"“{name}”: this type of file is not allowed.")
+        data = await file.read()
+        if not data:
+            raise HTTPException(400, f"“{name}” is empty.")
+        if len(data) > MAX_UPLOAD:
+            raise HTTPException(400, f"“{name}” is too large (limit 20 MB).")
+        prepared.append((name, data))
+    added = []
+    for i, (name, data) in enumerate(prepared):
+        stored = uuid.uuid4().hex + Path(name).suffix[:10]
+        (UPLOAD_DIR / stored).write_bytes(data)
+        added.append(eng.add_document(db, p, user, title=title if len(prepared) == 1 else "", url=url if i == 0 else "",
+                                      filename=name, stored=stored, size=len(data), step_key=step_key,
+                                      doc_type=doc_type, task_id=task_id).id)
+    if not prepared:
+        added.append(eng.add_document(db, p, user, title=title, url=url, step_key=step_key, doc_type=doc_type,
+                                      task_id=task_id).id)
+    return {"ids": added, "project": views.detail(db, p, user)}
+
+
+@app.post("/api/projects/{pid}/documents/attach")
+def attach(pid: int, body: Attach, db: Session = Depends(get_db), user: User = Depends(current_user)):
+    p = _project(db, pid, user)
+    for i in body.doc_ids:
+        src = db.get(Document, i)
+        if not src or src.project_id != p.id or not views.doc_visible(p, user, src):
+            raise HTTPException(404, "That document was not found.")
+    ids = eng.attach_documents(db, p, user, body.doc_ids, body.step_key, body.doc_type, body.task_id)
+    return {"ids": ids, "project": views.detail(db, p, user)}
+
+
+@app.post("/api/projects/{pid}/links")
+def add_link(pid: int, body: LinkIn, db: Session = Depends(get_db), user: User = Depends(current_user)):
+    p = _project(db, pid, user)
+    d = eng.add_link(db, p, user, body.title, body.url, body.step_key, body.doc_type)
+    return {"ids": [d.id], "project": views.detail(db, p, user)}
+
+
+@app.post("/api/documents/{did}/important")
+def important(did: int, body: Important, db: Session = Depends(get_db), user: User = Depends(current_user)):
+    d = db.get(Document, did)
+    if not d or not eng.can_see(d.project, user) or not views.doc_visible(d.project, user, d):
+        raise HTTPException(404, "File not found.")
+    eng.set_important(db, d.project, user, d, body.on)
+    return views.detail(db, d.project, user)
 
 
 @app.get("/api/documents/{did}")
 def download(did: int, db: Session = Depends(get_db), user: User = Depends(current_user)):
     d = db.get(Document, did)
-    path = UPLOAD_DIR / d.stored_name if d else None
-    if not d or not path.exists() or not eng.can_see(d.project, user):
+    if not d or not eng.can_see(d.project, user) or not views.doc_visible(d.project, user, d) or not d.stored_name:
+        raise HTTPException(404, "File not found.")
+    path = UPLOAD_DIR / d.stored_name
+    if not path.exists():
         raise HTTPException(404, "File not found.")
     return FileResponse(path, filename=d.filename)
 
@@ -423,14 +571,11 @@ def download(did: int, db: Session = Depends(get_db), user: User = Depends(curre
 @app.delete("/api/documents/{did}")
 def delete_doc(did: int, db: Session = Depends(get_db), user: User = Depends(current_user)):
     d = db.get(Document, did)
-    if not d or not eng.can_see(d.project, user):
+    if not d or not eng.can_see(d.project, user) or not views.doc_visible(d.project, user, d):
         raise HTTPException(404, "File not found.")
-    if not (user.role == "admin" or d.user_id == user.id):
-        raise HTTPException(403, "Only the person who added the file (or the Office Admin) can remove it.")
-    p = d.project
-    (UPLOAD_DIR / d.stored_name).unlink(missing_ok=True)
-    db.delete(d)
-    db.commit()
+    p, stored = d.project, d.stored_name
+    if eng.remove_document(db, p, user, d) and stored:
+        (UPLOAD_DIR / stored).unlink(missing_ok=True)
     return views.detail(db, p, user)
 
 

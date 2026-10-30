@@ -1,12 +1,12 @@
 import { useEffect, useRef, useState } from 'react'
 import { NavLink, Navigate, Route, Routes, useLocation, useNavigate } from 'react-router-dom'
 import {
-  AlertTriangle, ArrowRight, Bell, BellRing, Check, CornerUpLeft, FolderKanban, Home as HomeIcon, KeyRound, LogOut,
+  AlertTriangle, ArrowRight, Bell, BellRing, Check, Clock, CornerUpLeft, FolderKanban, Home as HomeIcon, KeyRound, LogOut,
   MessageSquare, Network, Pause, Route as RouteIcon, X,
 } from 'lucide-react'
 import { useApp } from './ctx'
 import { api } from './api'
-import { Avatar, Spinner } from './ui'
+import { Avatar, ErrorNote, Spinner } from './ui'
 import { ago } from './format'
 import { ChangePassword } from './modals'
 import Login from './pages/Login'
@@ -25,6 +25,7 @@ const KIND = {
   remind: { icon: BellRing, cls: 'k-warn' },
   escalate: { icon: AlertTriangle, cls: 'k-bad' },
   note: { icon: MessageSquare, cls: 'k-info' },
+  request: { icon: Clock, cls: 'k-warn' },
   info: { icon: Bell, cls: 'k-info' },
 }
 
@@ -162,12 +163,13 @@ function Layout({ children }) {
 }
 
 export default function App() {
-  const { user, ready, oversight } = useApp()
+  const { user, ready, oversight, loadError, retry } = useApp()
   const loc = useLocation()
   useEffect(() => {
     window.scrollTo(0, 0)
   }, [loc.pathname])
   if (!ready) return <Spinner />
+  if (!user && loadError) return <ErrorNote error={loadError} retry={retry} />
   if (!user) return <Login />
   return (
     <Layout>

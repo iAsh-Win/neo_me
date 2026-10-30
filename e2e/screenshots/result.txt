@@ -1,47 +1,42 @@
-PASS wrong password is refused with a clear message
-PASS sign-in with the form works
+PASS sign-in: wrong password refused, right one works
 PASS sign-out works
-PASS a team member has no Team page and no company-wide overview
-PASS opening /team by link sends a non-director home
-PASS Legal sees only projects that reached or involved Legal (6 of 15)
-PASS a project that is not theirs cannot be opened even with the link
-PASS a Director sees all projects, the stage overview and the Team page
-PASS notification centre opens
-PASS overdue steps escalated to the manager (2 escalation(s) for the India Director)
-PASS Directors see a 'Running late' list
-PASS new project validated and created (Development)
-PASS initiator steps done in the UI: screening → director approval → code → Master Excel → submission
-PASS India review → Send back (reason required) loops to Internal Review
-PASS clarification request loops back and tells the initiator
-PASS after clarification the brief returns to 'Updated Project Brief Received' (no second review)
-PASS feasibility → Hold pauses the project; a Director restarts it from the menu
-PASS Final Commercial Approval needs both Directors: first approval is recorded, project waits for the second
-PASS Final Commercial Approval → Hold/Reject loops back to Financial Review
-PASS Legal / Quality / PV review: each team signs separately
-PASS CDMO step asks which CDMO/CRO is confirmed before it can be completed
-PASS Regulatory decision → Hold/Reject loops back to dossier preparation
-PASS Concept / Artwork approval → Hold/Reject loops back to Concept Development
-PASS Development project completed through the UI, every step done by its responsible person
-PASS new project created (In-Licence)
-PASS In-Licence project completed through the UI (uses Regulatory Review, not CDMO)
-PASS Director rejects at the first decision: project closes, no code is issued, initiator sees the reason
-PASS initiator is notified of the rejection
-PASS initiator can send a reminder to the person a project is waiting for
-PASS reminders are limited (no spamming)
-PASS the owner gets the reminder; clicking it opens the project
-PASS notifications can be marked read
-PASS notes can be posted
-PASS files can be added and downloaded
-PASS files can be removed
-PASS initiator can edit project details
-PASS project Excel download works
-PASS a Director can cancel a project (reason required)
-PASS admin has nothing to approve ('Needs me' is empty)
-PASS search works
-PASS Master Excel download works
-PASS projects can be added from Excel
-PASS admin adds a person and places them in the reporting line
-PASS admin can switch a person off; they can no longer sign in
+PASS a team member sees only their projects; others cannot be opened even by link
+PASS the Excel download / import buttons are gone
+PASS Director sees all, a 'Running late' list and the escalations that reached them
+PASS a sent-back step shows who sent it, why, and where it returns
+PASS the approver sees the request for more time with the reason
+PASS Fast track: the print/readiness/submission tracks run side by side
+PASS new project validated and created
+PASS a step cannot be completed without its required document (file or link)
+PASS opportunity → brief done with files, links, details and ticks; code issued after Director approval
+PASS India review → Send back (reason required); initiator sees who sent it
+PASS clarification question loops to the initiator and comes back to 'Updated Project Brief Received'
+PASS send back to a chosen step: recipients shown, receiver notified, and it returns straight to the sender
+PASS feasibility → Hold pauses; a Director restarts it
+PASS Final Commercial Approval needs both Directors: first approval recorded, project waits
+PASS joint step: each team adds only its own agreement (Legal sees only the supplier agreement slot)
+PASS Legal / Quality / PV review: each team ticks its own point and signs separately
+PASS Fast track: Regulatory and Concept & artwork are both active at once, each for its own team
+PASS each track worked through its own steps; the project waited for both, then moved on together
+PASS Development project completed through the UI: files, links, details, ticks, loops, Fast track, send-backs
+PASS In-Licence project completed through the UI (Regulatory Review instead of CDMO)
+PASS Director rejects: project closes, no code, initiator sees the reason
+PASS asking for more time shows who it goes to; it needs a reason
+PASS the approver gets it on Home and as a notification
+PASS decline needs a reason and the requester is told; a second request can be approved
+PASS requests and answers are in the history
+PASS a task is given (shows who gets it), appears on their Home, can ask for time (goes to the giver) and be finished
+PASS one document dialog: name + file + link together, link-only, download, key document, search, removal
+PASS the history shows who sent what to whom, details, files and notes
+PASS every project shows its status, progress, who it is with and the latest note
+PASS Process map: 7 stages, parallel tracks marked, my steps highlighted, both project types
+PASS admin adds a person into the reporting line
 PASS a person can change their own password
-PASS Process map shows the flow chart, highlights my steps, and switches between Development and In-Licence
-PASS on a phone: open task, tap the big button, bottom tabs work, no sideways scrolling
+PASS hand over: the sender chose the person and the date; the receiver sees who sent it and what came with it
+PASS the other team member (not chosen) does not see the project
+PASS send back with a chosen person, a date and a document: the receiver sees the reason, the file and where it returns
+PASS reverse flow, two levels: each fix returns to whoever sent it, one step at a time, back to the decision
+PASS an existing project document can be used in a step slot (no re-upload) and counts as submitted
+PASS tasks carry documents both ways; a team member sees a focused view without the owner's summary
+PASS a reviewer gets a Summary (stages, attention, numbers) and a History that starts with the key moments only
+PASS on a phone: tick, tap the big button, bottom tabs, no sideways scrolling

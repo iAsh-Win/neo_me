@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { AlertTriangle, ArrowRight, CheckCheck, ChevronRight, Plus } from 'lucide-react'
+import { AlertTriangle, ArrowRight, CheckCheck, ChevronRight, Clock, ListChecks, Plus } from 'lucide-react'
 import { api } from '../api'
 import { useApp } from '../ctx'
 import { AvatarStack, DuePill, ErrorNote, JourneyDots, PhaseTile, Pill, Spinner, StatusPill } from '../ui'
@@ -12,18 +12,27 @@ const greet = () => {
   return h < 12 ? 'Good morning' : h < 17 ? 'Good afternoon' : 'Good evening'
 }
 
-export function TaskCard({ p, onOpen }) {
+const BUTTON = { step: 'Open', task: 'Open', request: 'Answer' }
+
+/** One thing that needs me: a step, a task someone gave me, or a request to answer. */
+export function TaskCard({ m, onOpen }) {
   const { phases } = useApp()
-  const color = phases[p.phase]?.color
+  const color = phases[m.phase]?.color
   return (
-    <button className={`task ${p.overdue ? 'late' : ''}`} onClick={onOpen}>
-      <PhaseTile phase={p.phase} color={color} size={48} />
+    <button className={`task ${m.overdue ? 'late' : ''} ${m.type}`} onClick={onOpen}>
+      {m.type === 'step' && <PhaseTile phase={m.phase} color={color} size={48} />}
+      {m.type === 'task' && <span className="tile" style={{ width: 48, height: 48, '--c': '#2563eb' }}><ListChecks size={24} /></span>}
+      {m.type === 'request' && <span className="tile" style={{ width: 48, height: 48, '--c': '#c26a05' }}><Clock size={24} /></span>}
       <span className="task-main">
-        <b>{p.title}</b>
-        <span className="task-step">{p.step_name}</span>
+        <b>{m.title}</b>
+        <span className="task-step">
+          {m.type === 'task' && <em>Task · </em>}{m.type === 'request' && <em>Request · </em>}{m.label}
+          {m.from && <small> · from {m.from}</small>}
+        </span>
       </span>
-      <DuePill project={p} />
-      <span className="btn primary go">{p.mode === 'decision' ? 'Decide' : 'Open'} <ArrowRight size={16} /></span>
+      {m.rework && <Pill tone="amber">Sent back</Pill>}
+      {m.due_days != null && <DuePill days={m.due_days} />}
+      <span className="btn primary go">{m.mode === 'decision' ? 'Decide' : BUTTON[m.type]} <ArrowRight size={16} /></span>
     </button>
   )
 }
@@ -34,7 +43,7 @@ function ProjectRow({ p, onOpen }) {
     <button className="prow" onClick={onOpen}>
       <span className="task-main">
         <b>{p.title}</b>
-        <span className="task-step">{p.step_name}</span>
+        <span className="task-step">{p.active.length > 1 ? `${p.active.length} steps side by side` : p.step_name}</span>
       </span>
       <JourneyDots phases={def.phases} current={p.phase} status={p.status} />
       {p.waiting.length > 0 && <AvatarStack names={p.waiting.flatMap((w) => w.people)} size={26} />}
@@ -73,7 +82,7 @@ export default function Home() {
           {c.waiting_me ? (
             <>
               <b className="hero-num">{c.waiting_me}</b>
-              <span>{c.waiting_me === 1 ? 'task needs' : 'tasks need'} you</span>
+              <span>{c.waiting_me === 1 ? 'thing needs' : 'things need'} you</span>
             </>
           ) : (
             <>
@@ -86,14 +95,14 @@ export default function Home() {
           <button onClick={() => nav('/projects?show=active')}><b>{c.active}</b><span>In progress</span></button>
           <button onClick={() => nav('/projects?show=on_hold')}><b>{c.on_hold}</b><span>On hold</span></button>
           <button onClick={() => nav('/projects?show=done')}><b>{c.completed}</b><span>Completed</span></button>
-          {oversight && <button className={c.overdue ? 'warn' : ''} onClick={() => nav('/projects?show=late')}><b>{c.overdue}</b><span>Overdue</span></button>}
+          {oversight && <button className={c.overdue ? 'warn' : ''} onClick={() => nav('/projects?show=late')}><b>{c.overdue}</b><span>Late</span></button>}
         </div>
       </section>
 
       {d.mine.length > 0 && (
         <section>
           <h2 className="sec">Needs you now</h2>
-          <div className="tasks">{d.mine.map((p) => <TaskCard key={p.id} p={p} onOpen={() => nav(`/projects/${p.id}`)} />)}</div>
+          <div className="tasks">{d.mine.map((m) => <TaskCard key={m.key} m={m} onOpen={() => nav(`/projects/${m.project_id}`)} />)}</div>
         </section>
       )}
 
@@ -108,7 +117,7 @@ export default function Home() {
         <section>
           <h2 className="sec">Where projects are</h2>
           <div className="stages">
-            {d.pipeline.map((s, i) => (
+            {d.pipeline.map((s) => (
               <button key={s.key} className={s.count ? '' : 'zero'} style={{ '--c': s.color }} onClick={() => nav(`/projects?phase=${s.key}`)}>
                 <PhaseTile phase={s.key} color={s.color} size={38} />
                 <b>{s.count}</b>

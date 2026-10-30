@@ -69,4 +69,6 @@ export const STATUS = {
   completed: { label: 'Completed', tone: 'green' },
 }
 
+export const shortName = (n = '') => { const p = n.replace(/^Dr\.?\s+/i, '').split(/\s+/); return p.length > 1 ? `${p[0]} ${p[1][0]}.` : n }
+
 export const ORG_TONE = { 'Neo Health (OTC)': 'brand', 'Neo India Lifeline': 'teal', Manufacturer: 'orange', Office: 'gray' }

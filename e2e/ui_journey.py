@@ -1,18 +1,17 @@
 """Browser test: drives the real screens like a person would.
 
-Run against a freshly started server with demo data:
+Run against a freshly started server with the demo data:
     NEO_URL=http://localhost:8090 python e2e/ui_journey.py
 Needs: pip install playwright (uses the installed Microsoft Edge).
 """
-import io
 import os
+import re
 import sys
 import time
 
-sys.stdout.reconfigure(encoding="utf-8")
-
 from playwright.sync_api import expect, sync_playwright
 
+sys.stdout.reconfigure(encoding="utf-8")
 BASE = os.environ.get("NEO_URL", "http://localhost:8090")
 OUT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "screenshots")
 os.makedirs(OUT, exist_ok=True)
@@ -32,169 +31,126 @@ with sync_playwright() as pw:
     page = ctx.new_page()
     page.set_default_timeout(10000)
     page.on("pageerror", lambda e: errors.append("JS: " + str(e)))
-    page.on("console", lambda m: errors.append("CONSOLE: " + m.text) if m.type == "error" and "401" not in m.text and "400" not in m.text and "403" not in m.text and "404" not in m.text and "429" not in m.text else None)
-
+    page.on("console", lambda m: errors.append("CONSOLE: " + m.text) if m.type == "error" and not any(c in m.text for c in ("401", "400", "403", "404", "429")) else None)
     tokens, current = {}, {"who": None}
 
-    def token_for(email):
-        if email not in tokens:
-            r = ctx.request.post(f"{BASE}/api/auth/login", data={"email": email, "password": PASS})
+    # ------------------------------------------------------------------ helpers
+    def token_for(who):
+        if who not in tokens:
+            r = ctx.request.post(f"{BASE}/api/auth/login", data={"email": who + DOM, "password": PASS})
             assert r.ok, r.text()
-            tokens[email] = r.json()["token"]
-        return tokens[email]
+            tokens[who] = r.json()["token"]
+        return tokens[who]
 
     def as_user(who):
-        """Sign in quickly (token) as a demo user, by first name e.g. 'ananya'."""
-        email = who + DOM
-        if current["who"] == email:
+        if current["who"] == who:
             return
         page.goto(BASE)
-        page.evaluate("t => localStorage.setItem('neo_token', t)", token_for(email))
-        current["who"] = email
+        page.evaluate("t => localStorage.setItem('neo_token', t)", token_for(who))
+        current["who"] = who
 
     def api(who, path, method="get", data=None):
-        h = {"Authorization": "Bearer " + token_for(who + DOM)}
         fn = getattr(ctx.request, method)
-        r = fn(f"{BASE}{path}", headers=h, **({"data": data} if data is not None else {}))
-        return r
+        kw = {"data": data} if data is not None else {}
+        return fn(f"{BASE}{path}", headers={"Authorization": "Bearer " + token_for(who)}, **kw)
+
+    def detail(pid):
+        return api("sneha", f"/api/projects/{pid}").json()
 
     def open_project(pid):
         page.goto(f"{BASE}/projects/{pid}")
-        page.wait_for_selector(".nowcard", timeout=10000)
+        try:
+            page.wait_for_selector(".strip")
+        except Exception:
+            snap("FAIL_open_project")
+            print("FAILED to open project", pid, "as", current["who"], "->", page.inner_text("body")[:300])
+            raise
+        page.wait_for_timeout(250)
 
     def toast(text):
-        expect(page.locator(".toast", has_text=text).first).to_be_visible(timeout=6000)
+        expect(page.locator(".toast", has_text=text).first).to_be_visible(timeout=7000)
 
     def snap(name):
         page.screenshot(path=f"{OUT}/{name}.png", full_page=True)
 
-    def step_title():
-        return page.locator(".nowcard h2").inner_text()
+    def card(name):
+        return page.locator(".nowcard.mine", has=page.locator("h2", has_text=name))
 
-    # ------------------------------------------------------------------ A. sign-in
-    page.goto(BASE)
-    page.evaluate("localStorage.clear()")
-    page.goto(BASE)
-    page.wait_for_selector(".login")
-    snap("A1_login")
-    page.get_by_label("Email").fill("ananya" + DOM)
-    page.get_by_label("Password", exact=True).fill("wrong-password")
-    page.get_by_role("button", name="Sign in", exact=True).click()
-    expect(page.locator(".form-error")).to_contain_text("not correct")
-    ok("wrong password is refused with a clear message")
-    page.get_by_label("Password", exact=True).fill(PASS)
-    page.get_by_role("button", name="Sign in", exact=True).click()
-    page.wait_for_selector(".hero")
-    expect(page.locator("h1")).to_contain_text("Ananya")
-    ok("sign-in with the form works")
-    page.get_by_role("button", name="My account").first.click()
-    page.get_by_role("button", name="Sign out").click()
-    page.wait_for_selector(".login")
-    ok("sign-out works")
+    # ---- fill a card like a person: documents (file / link alternately), details, ticks
+    def satisfy(c):
+        n = 0
+        while c.locator(".slot.need").count():
+            before = c.locator(".slot.need").count()
+            slot = c.locator(".slot.need").first
+            slot.get_by_role("button", name="Add document").click()
+            if n % 2 == 0:
+                page.locator(".modal input[type=file]").set_input_files({"name": f"doc{n}.pdf", "mimeType": "application/pdf", "buffer": b"%PDF-1.4 test"})
+            else:
+                page.locator(".modal input[placeholder='https://']").fill(f"https://share.example.test/doc{n}")
+            page.locator(".modal footer .btn.primary").click()
+            expect(c.locator(".slot.need")).to_have_count(before - 1)
+            n += 1
+        for i in range(c.locator(".fields .field").count()):
+            f = c.locator(".fields .field").nth(i)
+            if f.locator("select").count():
+                f.locator("select").select_option(index=1)
+            elif f.locator("textarea").count():
+                f.locator("textarea").fill("Please confirm the shelf life and the supplier.")
+            else:
+                inp = f.locator("input")
+                t = inp.get_attribute("type")
+                if not inp.input_value():
+                    inp.fill("5" if t == "number" else "2027-03-15" if t == "date" else "Sunrise Pharma")
+        for i in range(c.locator(".tick:not(.on)").count()):
+            c.locator(".tick:not(.on)").first.click()
 
-    # ------------------------------------------------------------------ B. role-based views
-    as_user("pooja")                                    # Legal – only involved in a few projects
-    page.goto(BASE)
-    page.wait_for_selector(".hero")
-    assert page.get_by_role("link", name="Team").count() == 0
-    assert page.get_by_text("Where projects are").count() == 0
-    ok("a team member has no Team page and no company-wide overview")
-    page.goto(BASE + "/team")
-    page.wait_for_selector(".hero")
-    assert page.url.rstrip("/") == BASE
-    ok("opening /team by link sends a non-director home")
-    pooja_projects = api("pooja", "/api/projects").json()
-    titles = [p["title"] for p in pooja_projects]
-    assert "Herbal Sleep Drops" not in titles and "Kids Honey Cough Syrup" not in titles
-    assert any(p["title"] == "Ashwagandha Stress Relief Capsules" for p in pooja_projects)
-    ok("Legal sees only projects that reached or involved Legal (%d of 15)" % len(pooja_projects))
-    hidden = [p for p in api("sneha", "/api/projects").json() if p["title"] == "Herbal Sleep Drops"][0]["id"]
-    page.goto(f"{BASE}/projects/{hidden}")
-    expect(page.get_by_text("We could not open this")).to_be_visible()
-    ok("a project that is not theirs cannot be opened even with the link")
-    as_user("rajiv")
-    page.goto(BASE)
-    page.wait_for_selector(".stages")
-    assert len(api("rajiv", "/api/projects").json()) == 15
-    expect(page.get_by_role("link", name="Team")).to_be_visible()
-    ok("a Director sees all projects, the stage overview and the Team page")
-    snap("B1_director_home")
+    def finish(name, action="approve", note="", target=None):
+        c = card(name)
+        expect(c).to_be_visible()
+        if action in ("approve", "done"):
+            satisfy(c)
+            c.locator(".act-buttons .btn.ok").click()
+            if name == "Neo India Lifeline Review":
+                page.get_by_role("button", name="Information is complete").click()
+                page.locator(".modal footer .btn.ok").click()
+        elif action == "incomplete":
+            c.locator(".act-buttons .btn.ok").click()
+            page.get_by_role("button", name="Information is incomplete").click()
+            page.locator(".modal footer .btn.ok").click()
+        elif action == "sendback":
+            c.locator(".act-buttons .btn.bad").click()
+            page.wait_for_selector(".targets")
+            if target:
+                page.locator(".target", has_text=target).click()
+            page.locator(".modal footer .btn.danger").click()
+            expect(page.locator(".modal .form-error")).to_contain_text(re.compile("why|reason"))          # a reason is required
+            page.locator(".modal textarea").fill(note or "Please fix this.")
+            page.locator(".modal footer .btn.danger").click()
+        elif action in ("hold", "reject"):
+            c.locator(".act-buttons .btn.ghost").click()
+            page.locator(".modal textarea").fill(note or "Not now.")
+            page.locator(f".modal footer .btn.{'amber' if action == 'hold' else 'danger'}").click()
+        page.locator(".toast").first.wait_for(timeout=8000)
 
-    # ------------------------------------------------------------------ C. escalation from seeded data
-    page.get_by_role("button", name="Notifications").click()
-    expect(page.locator(".notif")).to_be_visible()
-    snap("C1_notifications")
-    ok("notification centre opens")
-    page.keyboard.press("Escape")
-    page.mouse.click(700, 500)
-    esc = [n for n in api("suresh", "/api/notifications").json() if n["kind"] == "escalate"]
-    assert esc, "no escalation reached the India Director"
-    ok("overdue steps escalated to the manager (%d escalation(s) for the India Director)" % len(esc))
-    as_user("suresh")
-    page.goto(BASE)
-    page.wait_for_selector(".hero")
-    expect(page.get_by_text("Running late")).to_be_visible(timeout=8000)
-    ok("Directors see a 'Running late' list")
+    emails = {u["name"]: u["email"].split("@")[0] for u in api("sneha", "/api/users").json()}
 
-    # ------------------------------------------------------------------ D. generic driver: walk a project through the UI
-    users = api("sneha", "/api/users").json()
-    email_of = {u["name"]: u["email"].split("@")[0] for u in users}
-
-    def perform(pid, d, overrides):
-        a = d["action"]
-        step = d["current_step"]
-        choice = (overrides.get(step) or [("approve", "")]).pop(0) if a["mode"] == "decision" else None
-        if a["needs_file"] and not a["has_file"]:
-            page.locator(".need-file input[type=file]").set_input_files({"name": f"{step}.pdf", "mimeType": "application/pdf", "buffer": b"%PDF-1.4 test"})
-            toast("File attached")
-        if a["needs_text"]:
-            page.locator(".nowcard .act .field input").fill("Sunrise Pharma Pvt Ltd")
-        if a["needs_note"]:
-            page.locator(".nowcard .act .field textarea").fill("Please confirm shelf life and the supplier.")
-        if a["mode"] != "decision":
-            page.locator(".nowcard .act-buttons .btn.ok").click()
-        else:
-            kind, note = choice
-            if kind == "approve":
-                page.locator(".nowcard .act-buttons .btn.ok").click()
-                if step == "india_review":
-                    page.get_by_role("button", name="Information is complete").click()
-            elif kind == "incomplete":
-                page.locator(".nowcard .act-buttons .btn.ok").click()
-                page.get_by_role("button", name="Information is incomplete").click()
-            elif kind == "send_back":
-                page.locator(".nowcard .act-buttons .btn.bad").click()
-                page.locator(".modal footer .btn.danger").click()                    # no reason → blocked
-                expect(page.locator(".modal .form-error")).to_contain_text("reason")
-                page.locator(".modal textarea").fill(note)
-                page.locator(".modal footer .btn.danger").click()
-            elif kind in ("hold", "reject"):
-                page.locator(".nowcard .act-buttons .btn.bad").click()
-                page.locator(".modal textarea").fill(note)
-                page.locator(f".modal footer .btn.{'amber' if kind == 'hold' else 'danger'}").click()
-        page.locator(".toast").first.wait_for(timeout=6000)
-
-    def drive(pid, until=None, overrides=None, max_steps=120):
-        overrides = {k: list(v) for k, v in (overrides or {}).items()}
+    def drive(pid, hold=(), script=None, max_steps=150):
+        script = {k: list(v) for k, v in (script or {}).items()}
+        hold = set([hold] if isinstance(hold, str) else hold)
         for _ in range(max_steps):
-            d = api("sneha", f"/api/projects/{pid}").json()
-            if d["status"] != "active" or d["current_step"] == until:
+            d = detail(pid)
+            acts = d["actions"]
+            if d["status"] != "active" or (acts and all(a["key"] in hold for a in acts)):
                 return d
-            a = d["action"]
-            pending = [o for o in a["owners"] if not (a["all"] and o["role"] in a["signed"])]
-            actor = email_of[pending[0]["people"][0]]
-            as_user(actor)
-            try:
-                open_project(pid)
-            except Exception:
-                snap("FAIL_open_project")
-                print("FAILED to open project", pid, "step", d["current_step"], "as", actor, "url", page.url, page.inner_text("body")[:300])
-                raise
-            expect(page.locator(".nowcard.mine")).to_be_visible()
-            before = (d["current_step"], len(a["signed"]), d["step_total"])
-            perform(pid, d, overrides)
-            time.sleep(0.15)
-        raise AssertionError("project did not reach " + str(until))
+            a = next(x for x in acts if x["key"] not in hold)
+            owner = next(o for o in a["owners"] if not o["signed"])
+            as_user(emails[owner["people"][0]])
+            open_project(pid)
+            item = script[a["key"]].pop(0) if script.get(a["key"]) else None
+            kind, note, target = (tuple(item) + (None, None))[:3] if item else ("approve", "", None)
+            finish(a["name"], kind, note, target)
+            time.sleep(0.1)
+        raise AssertionError("did not settle on " + str(hold))
 
     def new_project(who, title, kind):
         as_user(who)
@@ -208,211 +164,345 @@ with sync_playwright() as pw:
         expect(page.locator(".modal .form-error")).to_contain_text("Development or In-Licence")
         page.locator(".choice button", has_text=kind).click()
         page.get_by_placeholder("optional").fill("350000")
-        page.get_by_placeholder("What is the product?").fill("Created by the browser test.")
-        snap("D1_new_project")
         page.get_by_role("button", name="Add project", exact=True).click()
         page.wait_for_selector(".nowcard")
-        pid = int(page.url.rsplit("/", 1)[1])
-        assert step_title() == "Neo Health (OTC) Screening"
-        return pid
+        return int(page.url.rsplit("/", 1)[1])
 
-    # ---- Development project with every loop
+    # ------------------------------------------------------------------ A. sign-in and role views
+    page.goto(BASE)
+    page.evaluate("localStorage.clear()")
+    page.goto(BASE)
+    page.wait_for_selector(".login")
+    snap("A1_login")
+    page.get_by_label("Email").fill("ananya" + DOM)
+    page.get_by_label("Password", exact=True).fill("wrong")
+    page.get_by_role("button", name="Sign in", exact=True).click()
+    expect(page.locator(".form-error")).to_contain_text("not correct")
+    page.get_by_label("Password", exact=True).fill(PASS)
+    page.get_by_role("button", name="Sign in", exact=True).click()
+    page.wait_for_selector(".hero")
+    ok("sign-in: wrong password refused, right one works")
+    page.get_by_role("button", name="My account").first.click()
+    page.get_by_role("button", name="Sign out").click()
+    page.wait_for_selector(".login")
+    ok("sign-out works")
+
+    as_user("pooja")
+    page.goto(BASE)
+    page.wait_for_selector(".hero")
+    assert page.get_by_role("link", name="Team").count() == 0 and page.get_by_text("Where projects are").count() == 0
+    titles = [p["title"] for p in api("pooja", "/api/projects").json()]
+    assert "Herbal Sleep Drops" not in titles and any("Ashwagandha" in t for t in titles)
+    hidden = [p for p in api("sneha", "/api/projects").json() if p["title"] == "Herbal Sleep Drops"][0]["id"]
+    page.goto(f"{BASE}/projects/{hidden}")
+    expect(page.get_by_text("We could not open this")).to_be_visible()
+    ok("a team member sees only their projects; others cannot be opened even by link")
+    page.goto(BASE + "/projects")
+    page.wait_for_selector(".pcard")
+    assert page.get_by_role("link", name="Download Master Excel").count() == 0 and page.get_by_text("From Excel").count() == 0
+    ok("the Excel download / import buttons are gone")
+    as_user("suresh")
+    page.goto(BASE)
+    page.wait_for_selector(".stages")
+    expect(page.get_by_text("Running late")).to_be_visible()
+    esc = [n for n in api("suresh", "/api/notifications").json() if n["kind"] == "escalate"]
+    assert esc
+    ok("Director sees all, a 'Running late' list and the escalations that reached them")
+
+    # ------------------------------------------------------------------ B. the demo's special cases, as the right person
+    ids = {p["title"]: p["id"] for p in api("sneha", "/api/projects").json()}
+    as_user("meera")
+    open_project(ids["Biotin Hair & Nails Gummies"])
+    c = page.locator(".nowcard.rework")
+    expect(c).to_contain_text("Sent back to you")
+    expect(c.locator(".received")).to_contain_text("Suresh Iyer")
+    expect(c.locator(".received")).to_contain_text("returns to Suresh Iyer")
+    snap("B1_rework_banner")
+    ok("a sent-back step shows who sent it, why, and where it returns")
+    as_user("suresh")
+    open_project(ids["Ibuprofen 5% Pain Relief Gel"])
+    expect(page.locator(".reqbox")).to_contain_text("Meera Joshi")
+    ok("the approver sees the request for more time with the reason")
+    as_user("ritika")
+    open_project(ids["C-Boost Vitamin C Effervescent 1000mg"])
+    expect(page.locator(".pgroup.fast")).to_be_visible()
+    expect(page.locator(".pg-track")).to_have_count(3)
+    snap("B2_parallel_tracks")
+    ok("Fast track: the print/readiness/submission tracks run side by side")
+
+    # ------------------------------------------------------------------ C. a Development project, all the way, by clicking
     pid = new_project("ananya", "Vitamin D3 Drops 1000IU", "Development")
-    ok("new project validated and created (Development)")
-    drive(pid, until="india_review")
-    ok("initiator steps done in the UI: screening → director approval → code → Master Excel → submission")
-    d = api("sneha", f"/api/projects/{pid}").json()
-    assert d["code"].startswith("NHO-DEV-")
-    drive(pid, until="india_review", overrides={})
-    as_user("suresh"); open_project(pid); snap("D2_india_review_decision")
-    drive(pid, until="internal_review", overrides={"india_review": [("send_back", "Please add stability data.")]})
-    assert step_title() == "Internal Review / Modification"
-    ok("India review → Send back (reason required) loops to Internal Review")
-    drive(pid, until="india_review")
-    drive(pid, until="clarification", overrides={"india_review": [("incomplete", "")]})
-    drive(pid, until="internal_review")
-    as_user("ananya"); open_project(pid)
-    expect(page.locator(".callout")).to_contain_text("clarification")
-    snap("D3_clarification")
-    ok("clarification request loops back and tells the initiator")
-    drive(pid, until="updated_brief")
-    assert step_title() == "Updated Project Brief Received"
-    ok("after clarification the brief returns to 'Updated Project Brief Received' (no second review)")
-    drive(pid, until="feas_decision")
-    drive(pid, until="cost", overrides={"feas_decision": [("hold", "Waiting for supplier price list.")]})
-    d = api("sneha", f"/api/projects/{pid}").json()
-    assert d["status"] == "on_hold"
-    as_user("suresh"); open_project(pid)
+    ok("new project validated and created")
+    snap("C1_new_project")
+    drive(pid, hold="validation")
+    as_user("ananya")
+    open_project(pid)
+    c = card("Commercial Validation")
+    c.locator(".act-buttons .btn.ok").click()
+    expect(c.locator(".form-error")).to_contain_text("Business case")
+    ok("a step cannot be completed without its required document (file or link)")
+    drive(pid, hold="india_review")
+    assert detail(pid)["code"].startswith("NHO-DEV-")
+    ok("opportunity → brief done with files, links, details and ticks; code issued after Director approval")
+    drive(pid, hold="internal_review", script={"india_review": [("sendback", "Please add stability data.")]})
+    as_user("ananya")
+    open_project(pid)
+    expect(page.locator(".received.bad")).to_contain_text("Suresh Iyer")
+    ok("India review → Send back (reason required); initiator sees who sent it")
+    drive(pid, hold="clarification", script={"india_review": [("incomplete",)]})
+    drive(pid, hold="internal_review")
+    as_user("ananya")
+    open_project(pid)
+    expect(page.locator(".received")).to_contain_text("Suresh Iyer")
+    drive(pid, hold="updated_brief")
+    ok("clarification question loops to the initiator and comes back to 'Updated Project Brief Received'")
+    drive(pid, hold="feas_decision")
+
+    # generic send back chosen from a list, to a specific earlier step
+    as_user("suresh")
+    open_project(pid)
+    c = card("Feasibility Decision")
+    c.locator(".act-buttons .btn.bad").click()
+    page.wait_for_selector(".targets")
+    snap("C2_send_back_picker")
+    page.locator(".target", has_text="Final Feasibility Report Preparation").click()
+    expect(page.locator(".modal .goes")).to_contain_text("Meera Joshi")
+    expect(page.locator(".modal .goes")).to_contain_text("comes straight back to you")
+    page.locator(".modal textarea").fill("Add the stability data first.")
+    page.locator(".modal footer .btn.danger").click()
+    toast("Sent back")
+    as_user("meera")
+    open_project(pid)
+    expect(page.locator(".nowcard.rework")).to_contain_text("Sent back to you")
+    finish("Final Feasibility Report Preparation")
+    as_user("suresh")
+    open_project(pid)
+    expect(card("Feasibility Decision")).to_be_visible()
+    ok("send back to a chosen step: recipients shown, receiver notified, and it returns straight to the sender")
+    finish("Feasibility Decision", "hold", "Waiting for supplier price list.")
     expect(page.locator(".nowcard.end.warn")).to_contain_text("supplier price")
-    snap("D4_on_hold")
     page.get_by_role("button", name="More actions").click()
     page.get_by_role("button", name="Restart").click()
     page.locator(".modal footer .btn.primary").click()
-    expect(page.locator(".nowcard h2")).to_have_text("Feasibility Decision")
-    ok("feasibility → Hold pauses the project; a Director restarts it from the menu")
-    drive(pid, until="commercial_approval", overrides={"feas_decision": [("approve", "")]})
-    as_user("suresh"); open_project(pid)
-    page.locator(".nowcard .act-buttons .btn.ok").click()
-    toast("Waiting for OTC Director")
-    expect(page.locator(".who.signed")).to_have_count(1)
-    expect(page.locator(".nowcard.mine")).to_have_count(0)
-    ok("Final Commercial Approval needs both Directors: first approval is recorded, project waits for the second")
-    as_user("rajiv"); open_project(pid)
-    snap("D5_second_director")
-    drive(pid, until="fin_review", overrides={"commercial_approval": [("send_back", "Margin too thin, redo the financials.")]})
-    ok("Final Commercial Approval → Hold/Reject loops back to Financial Review")
-    drive(pid, until="commercial_approval")
-    drive(pid, until="lqp_review")
-    as_user("pooja"); open_project(pid)
-    page.locator(".nowcard .act-buttons .btn.ok").click()
+    expect(page.locator(".nowcard.mine h2")).to_have_text("Feasibility Decision")
+    ok("feasibility → Hold pauses; a Director restarts it")
+    drive(pid, hold="commercial_approval")
+    as_user("suresh")
+    open_project(pid)
+    card("Final Commercial Approval").locator(".act-buttons .btn.ok").click()
     toast("Waiting for")
-    expect(page.locator(".who.signed")).to_have_count(1)
-    ok("Legal / Quality / PV review: each team signs separately")
-    drive(pid, until="cdmo")
-    page.goto(BASE)
-    as_user("suresh"); open_project(pid)
-    page.locator(".nowcard .act-buttons .btn.ok").click()
-    expect(page.locator(".toast", has_text="CDMO").or_(page.locator(".nowcard .form-error"))).to_be_visible()
-    ok("CDMO step asks which CDMO/CRO is confirmed before it can be completed")
-    drive(pid, until="reg_decision")
-    drive(pid, until="dossier_assign", overrides={"reg_decision": [("send_back", "Dossier is incomplete.")]})
-    ok("Regulatory decision → Hold/Reject loops back to dossier preparation")
-    drive(pid, until="artwork_approval")
-    drive(pid, until="concept", overrides={"artwork_approval": [("send_back", "Simplify the front panel.")]})
-    ok("Concept / Artwork approval → Hold/Reject loops back to Concept Development")
-    d = drive(pid)
-    assert d["status"] == "completed", d["status"]
-    as_user("rajiv"); open_project(pid)
-    expect(page.locator(".nowcard.end.ok")).to_contain_text("Project completed")
-    snap("D6_completed")
-    ok("Development project completed through the UI, every step done by its responsible person")
-    done_steps = [s for s in d["steps"] if s["state"] == "done"]
-    assert len(done_steps) == d["step_total"] - 1 or len(done_steps) == len(d["steps"]), (len(done_steps), len(d["steps"]))
+    expect(page.locator(".waitcard .who.signed, .nowcard .who.signed")).to_have_count(1)
+    ok("Final Commercial Approval needs both Directors: first approval recorded, project waits")
+    as_user("rajiv")
+    open_project(pid)
+    finish("Final Commercial Approval", "sendback", "Margin too thin.", "Financial Review")
+    drive(pid, hold="commercial_approval")
+    drive(pid, hold="agreement_prep")
+    as_user("pooja")
+    open_project(pid)
+    c = card("Agreement Preparation")
+    expect(c.locator(".slot-btn")).to_have_count(1)                                   # only Legal's own agreement
+    expect(c.locator(".slot", has_text="Quality agreement")).to_contain_text("Quality")
+    snap("L0_joint_documents")
+    ok("joint step: each team adds only its own agreement (Legal sees only the supplier agreement slot)")
+    drive(pid, hold="lqp_review")
+    as_user("pooja")
+    open_project(pid)
+    c = card("Legal / Quality / Pharmacovigilance Review")
+    expect(c.locator(".tick")).to_have_count(1)
+    c.locator(".tick").click()
+    c.locator(".act-buttons .btn.ok").click()
+    toast("Waiting for")
+    ok("Legal / Quality / PV review: each team ticks its own point and signs separately")
+    drive(pid, hold="agreement_decision")
 
-    # ---- In-Licence project, straight through
-    pid2 = new_project("rohit", "Calcium + K2 Tablets", "In-Licence")
-    ok("new project created (In-Licence)")
-    d2 = drive(pid2)
-    assert d2["status"] == "completed"
-    names = [s["name"] for s in d2["steps"]]
-    assert "Regulatory Review and Approval" in names and "CDMO / CRO Identify and Confirm" not in names
-    ok("In-Licence project completed through the UI (uses Regulatory Review, not CDMO)")
-
-    # ---- reject path
-    pid3 = new_project("ananya", "Test Reject Product", "Development")
-    drive(pid3, until="otc_decision")
-    drive(pid3, overrides={"otc_decision": [("reject", "Not a fit for the range.")]})
-    d3 = api("sneha", f"/api/projects/{pid3}").json()
-    assert d3["status"] == "rejected" and d3["code"] is None
-    as_user("ananya"); open_project(pid3)
-    expect(page.locator(".nowcard.end.bad")).to_contain_text("Not a fit")
-    ok("Director rejects at the first decision: project closes, no code is issued, initiator sees the reason")
-    note = [n for n in api("ananya", "/api/notifications").json() if "rejected" in n["text"]]
-    assert note
-    ok("initiator is notified of the rejection")
-
-    # ------------------------------------------------------------------ E. notifications and reminders
-    pid4 = new_project("ananya", "Reminder Test Product", "Development")
-    drive(pid4, until="otc_decision")
-    as_user("ananya"); open_project(pid4)
-    page.get_by_role("button", name="Send reminder").click()
-    toast("Reminder sent")
-    ok("initiator can send a reminder to the person a project is waiting for")
-    page.get_by_role("button", name="Send reminder").click()
-    toast("already sent")
-    ok("reminders are limited (no spamming)")
-    as_user("rajiv"); page.goto(BASE)
-    page.wait_for_selector(".hero")
-    expect(page.locator(".bell .icon-btn b")).to_be_visible()
-    page.get_by_role("button", name="Notifications").click()
-    expect(page.locator(".note.new", has_text="reminds you")).to_be_visible()
-    snap("E1_reminder_notification")
-    page.locator(".note.new", has_text="reminds you").first.click()
-    page.wait_for_selector(".nowcard")
-    assert "Reminder Test Product" in page.locator("h1").inner_text()
-    ok("the owner gets the reminder; clicking it opens the project")
-    page.get_by_role("button", name="Notifications").click()
-    page.get_by_role("button", name="Mark all read").click() if page.get_by_role("button", name="Mark all read").count() else None
-    page.wait_for_timeout(600)
-    ok("notifications can be marked read")
-
-    # ------------------------------------------------------------------ F. notes, files, details, hold/cancel
-    as_user("rajiv"); open_project(pid4)
-    page.get_by_role("tab", name="Notes").click()
-    page.get_by_placeholder("Write a note…").fill("Please decide this week.")
-    page.get_by_role("button", name="Post").click()
-    expect(page.locator(".bubble", has_text="decide this week")).to_be_visible()
-    ok("notes can be posted")
-    page.get_by_role("tab", name="Files").click()
-    page.locator(".tabpane input[type=file]").set_input_files({"name": "quote.pdf", "mimeType": "application/pdf", "buffer": b"%PDF test"})
-    expect(page.locator(".file", has_text="quote.pdf")).to_be_visible()
-    with page.expect_download() as dl:
-        page.locator(".file", has_text="quote.pdf").locator("a").click()
-    assert dl.value.suggested_filename == "quote.pdf"
-    ok("files can be added and downloaded")
-    page.once("dialog", lambda dlg: dlg.accept())
-    page.locator(".file", has_text="quote.pdf").get_by_role("button").click()
-    expect(page.locator(".file", has_text="quote.pdf")).to_have_count(0)
-    ok("files can be removed")
-    page.get_by_role("button", name="Details").click()
-    expect(page.locator(".modal")).to_contain_text("Reminder Test Product".split()[0] and "Development")
-    page.keyboard.press("Escape")
-    as_user("ananya"); open_project(pid4)
-    page.get_by_role("button", name="Details").click()
-    page.get_by_role("button", name="Edit").click()
-    page.locator(".modal input").first.fill("Reminder Test Product v2")
-    page.get_by_role("button", name="Save").click()
-    toast("Saved")
-    expect(page.locator("h1")).to_contain_text("v2")
-    ok("initiator can edit project details")
-    with page.expect_download() as dl:
-        page.get_by_role("button", name="More actions").click()
-        page.get_by_role("link", name="Download Excel").click()
-    assert dl.value.suggested_filename.endswith(".xlsx")
-    ok("project Excel download works")
-    as_user("rajiv"); open_project(pid4)
+    # Fast track on for the next stretch
+    as_user("rajiv")
+    open_project(pid)
     page.get_by_role("button", name="More actions").click()
-    page.get_by_role("button", name="Cancel project").click()
-    page.locator(".modal footer .btn.danger").click()
-    expect(page.locator(".modal .form-error")).to_contain_text("reason")
-    page.locator(".modal textarea").fill("Priorities changed.")
-    page.locator(".modal footer .btn.danger").click()
-    expect(page.locator(".nowcard.end.bad")).to_contain_text("Priorities changed")
-    ok("a Director can cancel a project (reason required)")
+    page.get_by_role("button", name="Fast track").click()
+    expect(page.locator(".modal")).to_contain_text("side by side")
+    page.locator(".modal footer .btn.primary").click()
+    toast("Fast track is on")
+    page.keyboard.press("Escape")
+    drive(pid, hold="agreement_decision")
+    drive(pid, hold={"handover", "concept"})
+    assert sorted(a["key"] for a in detail(pid)["actions"]) == ["concept", "handover"]
+    as_user("sanjay")
+    open_project(pid)
+    expect(page.locator(".waitcard")).to_have_count(1)
+    expect(card("Handover to the Regulatory")).to_be_visible()
+    snap("C3_two_tracks_side_by_side")
+    ok("Fast track: Regulatory and Concept & artwork are both active at once, each for its own team")
+    drive(pid, hold="mfr_tech")
+    assert detail(pid)["actions"][0]["key"] == "mfr_tech"
+    ok("each track worked through its own steps; the project waited for both, then moved on together")
+    d = drive(pid, hold=(), script={"mfr_approval": [("sendback", "The proof colour is off.", "Manufacturer Print Proof")]})
+    assert d["status"] == "completed", d["status"]
+    as_user("rajiv")
+    open_project(pid)
+    expect(page.locator(".nowcard.end.ok")).to_contain_text("Project completed")
+    snap("C4_completed")
+    ok("Development project completed through the UI: files, links, details, ticks, loops, Fast track, send-backs")
 
-    # ------------------------------------------------------------------ G. projects list, filters, Excel
-    as_user("sneha"); page.goto(BASE + "/projects")
-    page.wait_for_selector(".pcard")
-    page.get_by_role("tab", name="Needs me").click()
-    expect(page.locator(".empty")).to_be_visible()
-    ok("admin has nothing to approve ('Needs me' is empty)")
-    page.get_by_role("tab", name="All").click()
-    page.get_by_label("Search projects").fill("probiotic")
-    expect(page.locator(".pcard")).to_have_count(1)
-    ok("search works")
-    page.get_by_label("Search projects").fill("")
+    # ------------------------------------------------------------------ D. In-Licence project straight through
+    pid2 = new_project("rohit", "Calcium + K2 Tablets", "In-Licence")
+    d2 = drive(pid2)
+    names = [s["name"] for s in d2["steps"]]
+    assert d2["status"] == "completed" and "Regulatory Review and Approval" in names and "CDMO / CRO Identify and Confirm" not in names
+    ok("In-Licence project completed through the UI (Regulatory Review instead of CDMO)")
+
+    # ------------------------------------------------------------------ E. reject
+    pid3 = new_project("ananya", "Test Reject Product", "Development")
+    drive(pid3, hold="otc_decision")
+    as_user("rajiv")
+    open_project(pid3)
+    finish("Director Decision", "reject", "Not a fit for the range.")
+    assert detail(pid3)["code"] is None
+    as_user("ananya")
+    open_project(pid3)
+    expect(page.locator(".nowcard.end.bad")).to_contain_text("Not a fit")
+    ok("Director rejects: project closes, no code, initiator sees the reason")
+
+    # ------------------------------------------------------------------ F. more time
+    pid4 = new_project("ananya", "Time Request Product", "Development")
+    drive(pid4, hold="fmea")
+    as_user("meera")
+    open_project(pid4)
+    c = card("Risk Analysis (FMEA)")
+    c.get_by_role("button", name="More").click()
+    page.get_by_role("button", name="Ask for more time").click()
+    expect(page.locator(".modal .goes")).to_contain_text("Suresh Iyer")
+    page.locator(".modal footer .btn.primary").click()
+    expect(page.locator(".modal .form-error")).to_contain_text("why")
+    page.locator(".modal textarea").fill("The plant data arrives next week.")
+    snap("F1_ask_more_time")
+    page.locator(".modal footer .btn.primary").click()
+    toast("Request sent to Suresh Iyer")
+    ok("asking for more time shows who it goes to; it needs a reason")
+    as_user("suresh")
+    page.goto(BASE)
+    page.wait_for_selector(".hero")
+    expect(page.locator(".task.request").filter(has_text="Meera Joshi asks for more time").first).to_be_visible()
+    ok("the approver gets it on Home and as a notification")
+    open_project(pid4)
+    page.locator(".reqbox .btn.bad").click()
+    page.locator(".reqbox input").fill("We cannot move this one.")
+    page.locator(".reqbox .btn.danger").click()
+    toast("Declined")
+    notes = " ".join(n["text"] for n in api("meera", "/api/notifications").json())
+    assert "declined" in notes and "We cannot move this one" in notes
+    as_user("meera")
+    open_project(pid4)
+    c = card("Risk Analysis (FMEA)")
+    c.get_by_role("button", name="More").click()
+    page.get_by_role("button", name="Ask for more time").click()
+    page.locator(".modal textarea").fill("Please, it is really needed.")
+    page.locator(".modal footer .btn.primary").click()
+    toast("Request sent")
+    as_user("suresh")
+    open_project(pid4)
+    page.locator(".reqbox .btn.ok").click()
+    toast("Approved")
+    notes = " ".join(n["text"] for n in api("meera", "/api/notifications").json())
+    assert "approved your request" in notes
+    ok("decline needs a reason and the requester is told; a second request can be approved")
+    page.get_by_role("tab", name="History").click()
+    page.get_by_role("button", name="Everything").click()
+    expect(page.locator(".h-item", has_text="asked for more time").first).to_be_visible()
+    expect(page.locator(".h-item", has_text="declined more time").first).to_be_visible()
+    ok("requests and answers are in the history")
+
+    # ------------------------------------------------------------------ G. tasks
+    as_user("ananya")
+    open_project(pid4)
+    page.get_by_role("tab", name="Tasks").click()
+    page.get_by_role("button", name="Give a task").click()
+    page.get_by_placeholder("e.g. Get the GMP clearance letter").fill("Check the claim wording")
+    page.locator(".modal select").first.select_option(label="Pooja Bansal · Legal")
+    expect(page.locator(".modal .goes")).to_contain_text("Pooja Bansal")
+    page.locator(".modal footer .btn.primary").click()
+    toast("Task given")
+    as_user("pooja")
+    page.goto(BASE)
+    page.wait_for_selector(".hero")
+    expect(page.locator(".task.task", has_text="Check the claim wording")).to_be_visible()
+    page.locator(".task.task", has_text="Check the claim wording").click()
+    page.wait_for_selector(".strip")
+    page.get_by_role("tab", name="Tasks").click()
+    page.get_by_role("button", name="More time").click()
+    expect(page.locator(".modal .goes")).to_contain_text("Ananya Reddy")
+    page.locator(".modal textarea").fill("Waiting for counsel.")
+    page.locator(".modal footer .btn.primary").click()
+    toast("Request sent to Ananya Reddy")
+    page.get_by_role("button", name="Done").first.click()
+    page.locator(".modal footer .btn.primary").click()
+    toast("Done")
+    ok("a task is given (shows who gets it), appears on their Home, can ask for time (goes to the giver) and be finished")
+
+    # ------------------------------------------------------------------ H. documents (one dialog: name + file(s) + link)
+    as_user("ananya")
+    open_project(pid4)
+    page.get_by_role("tab", name="Files").click()
+    page.get_by_role("button", name="Add document").first.click()
+    page.locator(".modal input[type=file]").set_input_files([{"name": "a.pdf", "mimeType": "application/pdf", "buffer": b"%PDF a"}])
+    page.locator(".modal input[placeholder='https://']").fill("https://share.example.test/folder")
+    page.get_by_placeholder("a.pdf").fill("Price list")
+    page.locator(".modal footer .btn.primary").click()
+    toast("Document added")
+    chip = page.locator(".fitem .docchip", has_text="Price list")
+    expect(chip).to_have_count(1)
+    expect(chip.locator("a.also")).to_have_count(1)                                    # one document: file and link together
     with page.expect_download() as dl:
-        page.get_by_role("link", name="Download Master Excel").click()
-    assert dl.value.suggested_filename.endswith(".xlsx")
-    ok("Master Excel download works")
-    from openpyxl import Workbook
-    wb = Workbook()
-    ws = wb.active
-    ws.append(["Project name", "Type", "Market", "Desc", "Value"])
-    ws.append(["Imported Lozenge", "In-Licence", "Australia", "from excel", 120000])
-    buf = io.BytesIO()
-    wb.save(buf)
-    page.get_by_role("button", name="Add projects from Excel").click()
-    page.locator(".modal select").select_option(label="Rohit Malhotra")
-    page.locator(".modal input[type=file]").set_input_files({"name": "in.xlsx", "mimeType": "application/vnd.ms-excel", "buffer": buf.getvalue()})
-    page.get_by_role("button", name="Add projects", exact=True).click()
-    toast("1 project added")
-    ok("projects can be added from Excel")
+        chip.locator("a").first.click()
+    assert dl.value.suggested_filename == "a.pdf"
+    page.get_by_role("button", name="Add document").first.click()
+    page.locator(".modal input[placeholder='https://']").fill("https://share.example.test/only-link")
+    page.locator(".modal footer .btn.primary").click()
+    toast("Document added")
+    page.get_by_role("button", name="Add document").first.click()
+    page.locator(".modal footer .btn.primary").click()
+    expect(page.locator(".modal .form-error")).to_contain_text("file or paste a link")
+    page.locator(".modal footer .btn", has_text="Cancel").click()
+    page.get_by_role("button", name="Mark Price list as key").click()
+    expect(page.locator(".fgroup.keys")).to_contain_text("Price list")
+    page.once("dialog", lambda dlg: dlg.accept())
+    page.locator(".fitem .docchip", has_text="only-link").first.locator(".x").last.click()
+    expect(page.locator(".fitem .docchip", has_text="only-link")).to_have_count(0)
+    ok("one document dialog: name + file + link together, link-only, download, key document, search, removal")
 
-    # ------------------------------------------------------------------ H. team, hierarchy, password
+    # ------------------------------------------------------------------ I. history and status
+    as_user("rajiv")
+    open_project(pid)
+    page.get_by_role("tab", name="History").click()
+    expect(page.locator(".chip.on")).to_have_text("Key moments")
+    expect(page.locator(".h-item", has_text="sent Feasibility Decision back").first).to_be_visible()
+    page.get_by_role("button", name="Everything").click()
+    expect(page.locator(".h-to", has_text="Goes to").first).to_be_visible()
+    expect(page.locator(".h-data").first).to_be_visible()
+    page.get_by_placeholder("Write a note for the team…").fill("Great work everyone.")
+    page.get_by_role("button", name="Post").click()
+    expect(page.locator(".bubble", has_text="Great work")).to_be_visible()
+    snap("I1_history")
+    ok("the history shows who sent what to whom, details, files and notes")
+    open_project(pid)
+    expect(page.locator(".strip")).to_contain_text("Status")
+    expect(page.locator(".strip")).to_contain_text("Great work everyone.")
+    ok("every project shows its status, progress, who it is with and the latest note")
+
+    # ------------------------------------------------------------------ J. process map, team, password
+    as_user("sanjay")
+    page.goto(BASE + "/process")
+    page.wait_for_selector(".band")
+    expect(page.locator(".pgroup").first).to_contain_text("Can run side by side")
+    expect(page.locator(".node.mine").first).to_be_visible()
+    page.get_by_role("tab", name="In-Licence").click()
+    assert page.locator(".node-name", has_text="CDMO / CRO Identify and Confirm").count() == 0
+    snap("J1_process_map")
+    ok("Process map: 7 stages, parallel tracks marked, my steps highlighted, both project types")
+    as_user("sneha")
     page.goto(BASE + "/team")
     page.wait_for_selector(".person")
-    snap("H1_team")
     page.get_by_role("button", name="Add person").click()
     page.locator(".modal input").nth(0).fill("Kavita Rao")
     page.locator(".modal input").nth(1).fill("kavita@neohealth.example")
@@ -422,66 +512,174 @@ with sync_playwright() as pw:
     page.get_by_role("button", name="Save").click()
     toast("Person added")
     expect(page.locator(".person", has_text="Kavita Rao")).to_be_visible()
-    ok("admin adds a person and places them in the reporting line")
-    page.locator(".person", has_text="Kavita Rao").click()
-    page.get_by_label("Can sign in").uncheck()
-    page.get_by_role("button", name="Save").click()
-    toast("Saved")
-    r = ctx.request.post(f"{BASE}/api/auth/login", data={"email": "kavita@neohealth.example", "password": "kavita123"})
-    assert r.status == 401
-    ok("admin can switch a person off; they can no longer sign in")
-    # password change as a normal user
-    as_user("harsh"); page.goto(BASE)
+    ok("admin adds a person into the reporting line")
+    as_user("harsh")
+    page.goto(BASE)
     page.wait_for_selector(".hero")
     page.get_by_role("button", name="My account").first.click()
     page.get_by_role("button", name="Change password").click()
-    pw = page.locator(".modal input[type=password]")
-    pw.nth(0).fill(PASS)
-    pw.nth(1).fill("harsh-new-1")
-    pw.nth(2).fill("harsh-new-1")
+    pw_ = page.locator(".modal input[type=password]")
+    pw_.nth(0).fill(PASS)
+    pw_.nth(1).fill("harsh-new-1")
+    pw_.nth(2).fill("harsh-new-1")
     page.get_by_role("button", name="Save").click()
     toast("Password changed")
-    r = ctx.request.post(f"{BASE}/api/auth/login", data={"email": "harsh" + DOM, "password": "harsh-new-1"})
-    assert r.ok
     ok("a person can change their own password")
 
-    # ------------------------------------------------------------------ I. process map
-    as_user("sanjay"); page.goto(BASE + "/process")
-    page.wait_for_selector(".band")
-    expect(page.locator(".node.mine").first).to_be_visible()
-    assert page.locator(".node-name", has_text="CDMO / CRO Identify and Confirm").count() == 1
-    page.get_by_role("tab", name="In-Licence").click()
-    assert page.locator(".node-name", has_text="CDMO / CRO Identify and Confirm").count() == 0
-    assert page.locator(".node-name", has_text="Regulatory Review and Approval").count() == 1
-    snap("I1_process_map")
-    ok("Process map shows the flow chart, highlights my steps, and switches between Development and In-Licence")
+    # ------------------------------------------------------------------ L. round 4
+    pid6 = new_project("ananya", "Reverse Flow Product", "Development")
+    drive(pid6, hold="cft_review")
+    as_user("suresh")
+    open_project(pid6)
+    cr = card("Cross-Functional Review")
+    expect(cr.locator(".handover")).to_contain_text("Risk Analysis (FMEA)")
+    cr.locator(".handover select").select_option(label="Karthik Subramanian (CFT)")
+    cr.locator(".handover input[type=date]").fill(time.strftime("%Y-%m-%d", time.localtime(time.time() + 9 * 86400)))
+    snap("L1_handover_picker")
+    cr.locator(".act-buttons .btn.ok").click()
+    toast("Done")
+    as_user("karthik")
+    open_project(pid6)
+    fm = card("Risk Analysis (FMEA)")
+    expect(fm.locator(".received")).to_contain_text("Suresh Iyer")
+    expect(fm.locator(".now-top")).to_contain_text("left")
+    ok("hand over: the sender chose the person and the date; the receiver sees who sent it and what came with it")
+    as_user("meera")
+    page.goto(f"{BASE}/projects/{pid6}")
+    expect(page.get_by_text("We could not open this")).to_be_visible()
+    ok("the other team member (not chosen) does not see the project")
 
-    # ------------------------------------------------------------------ J. phone: approve on a mobile screen
+    # fix chain: FMEA → feasibility prep → feasibility submit → decision, with docs, then reverse two levels
+    as_user("karthik")
+    open_project(pid6)
+    finish("Risk Analysis (FMEA)")
+    drive(pid6, hold="feas_decision")
+    as_user("suresh")
+    open_project(pid6)
+    d = card("Feasibility Decision")
+    expect(d.locator(".received")).to_contain_text("Final Feasibility Report Submission")
+    expect(d.locator(".received .docrow")).to_have_count(1)                              # the report that was attached
+    expect(d.locator(".received .rec-facts")).to_be_visible()                             # and the details that were filled in
+    d.locator(".act-buttons .btn.bad").click()
+    page.wait_for_selector(".targets")
+    page.locator(".target", has_text="Final Feasibility Report Preparation").click()
+    page.locator(".modal .field", has_text="Send it to").locator("select").select_option(label="Karthik Subramanian (CFT)")
+    page.locator(".modal textarea").fill("Add the stability data first.")
+    page.locator(".modal .slot-btn").click()
+    page.locator(".modal .modal input[type=file]").set_input_files({"name": "comments.pdf", "mimeType": "application/pdf", "buffer": b"%PDF c"})
+    page.locator(".modal .modal footer .btn.primary").click()
+    expect(page.locator(".modal .docchip", has_text="comments.pdf")).to_be_visible()
+    page.locator(".modal footer .btn.danger").last.click()
+    toast("Sent back")
+    as_user("karthik")
+    open_project(pid6)
+    rw = page.locator(".nowcard.rework")
+    expect(rw.locator(".received.bad")).to_contain_text("Add the stability data first.")
+    expect(rw.locator(".received .docrow", has_text="comments.pdf")).to_be_visible()   # the sender's file is visible to the receiver
+    expect(rw.locator(".received")).to_contain_text("returns to Suresh Iyer")
+    snap("L2_received_sendback")
+    ok("send back with a chosen person, a date and a document: the receiver sees the reason, the file and where it returns")
+    # reverse a second level: preparation sends back to the FMEA step, the fix returns step by step
+    rw.locator(".act-buttons .btn.bad").click()
+    page.wait_for_selector(".targets")
+    page.locator(".target", has_text="Risk Analysis (FMEA)").click()
+    page.locator(".modal textarea").fill("The risk table is incomplete.")
+    page.locator(".modal footer .btn.danger").click()
+    toast("Sent back")
+    as_user("meera")
+    open_project(pid6)
+    expect(card("Risk Analysis (FMEA)").locator(".received.bad")).to_contain_text("Karthik Subramanian")
+    finish("Risk Analysis (FMEA)")
+    as_user("karthik")
+    open_project(pid6)
+    expect(card("Final Feasibility Report Preparation").locator(".received")).to_contain_text("Meera Joshi")
+    finish("Final Feasibility Report Preparation")
+    as_user("suresh")
+    open_project(pid6)
+    expect(card("Feasibility Decision")).to_be_visible()
+    ok("reverse flow, two levels: each fix returns to whoever sent it, one step at a time, back to the decision")
+
+    # reuse an existing document in another step's slot
+    as_user("suresh")
+    finish("Feasibility Decision")
+    as_user("suresh")
+    open_project(pid6)
+    cost = card("Cost Finalization")
+    cost.locator(".slot", has_text="Quotation").get_by_role("button", name="Add document").click()
+    page.get_by_role("tab", name="Already in this project").click()
+    first = page.locator(".picklist label").first
+    first.click()
+    page.locator(".modal footer .btn.primary").click()
+    toast("Document added here")
+    expect(cost.locator(".slot.ok", has_text="Quotation")).to_be_visible()
+    ok("an existing project document can be used in a step slot (no re-upload) and counts as submitted")
+
+    # task documents
+    as_user("ananya")
+    open_project(pid6)
+    page.get_by_role("tab", name="Tasks").click()
+    page.get_by_role("button", name="Give a task").click()
+    page.get_by_placeholder("e.g. Get the GMP clearance letter").fill("Check the pack artwork")
+    page.locator(".modal select").first.select_option(label="Ritika Sen · Artwork")
+    page.locator(".modal .task-docs .link").click()
+    page.locator(".modal .modal input[type=file]").set_input_files({"name": "pack-brief.pdf", "mimeType": "application/pdf", "buffer": b"%PDF b"})
+    page.locator(".modal .modal footer .btn.primary").click()
+    page.locator(".modal footer .btn.primary").last.click()
+    toast("Task given")
+    expect(page.locator(".trow .docchip", has_text="pack-brief.pdf")).to_be_visible()
+    as_user("ritika")
+    open_project(pid6)
+    page.get_by_role("tab", name="Tasks").click()
+    expect(page.locator(".trow .docchip", has_text="pack-brief.pdf")).to_be_visible()
+    page.locator(".trow").get_by_role("button", name="Add document").click()
+    page.locator(".modal input[type=file]").set_input_files({"name": "checked.pdf", "mimeType": "application/pdf", "buffer": b"%PDF r"})
+    page.locator(".modal footer .btn.primary").click()
+    expect(page.locator(".trow .docchip", has_text="checked.pdf")).to_be_visible()
+    expect(page.locator(".scope-note")).to_be_visible()
+    assert page.get_by_role("tab", name="Summary").count() == 0
+    ok("tasks carry documents both ways; a team member sees a focused view without the owner's summary")
+
+    # the short version for a reviewer
+    as_user("rajiv")
+    open_project(pid6)
+    expect(page.get_by_role("tab", name="Summary")).to_have_attribute("aria-selected", "true")
+    expect(page.locator(".stage")).to_have_count(7)
+    expect(page.locator(".stage.done").first).to_be_visible()
+    expect(page.locator(".nums")).to_contain_text("send-backs")
+    snap("L3_summary")
+    page.get_by_role("tab", name="History").click()
+    expect(page.locator(".chip.on")).to_have_text("Key moments")
+    n_key = page.locator(".h-item").count()
+    page.get_by_role("button", name="Everything").click()
+    assert page.locator(".h-item").count() > n_key
+    ok("a reviewer gets a Summary (stages, attention, numbers) and a History that starts with the key moments only")
+
+    # ------------------------------------------------------------------ K. phone
     mctx = browser.new_context(viewport={"width": 390, "height": 844}, device_scale_factor=2, has_touch=True, is_mobile=True)
     m = mctx.new_page()
     m.set_default_timeout(10000)
     m.on("pageerror", lambda e: errors.append("MOBILE JS: " + str(e)))
-    pid5 = None
-    r = ctx.request.post(f"{BASE}/api/auth/login", data={"email": "ananya" + DOM, "password": PASS})
-    tok = r.json()["token"]
-    rr = ctx.request.post(f"{BASE}/api/projects", headers={"Authorization": "Bearer " + tok}, data={"title": "Phone Test Product", "ptype": "development", "market": "AU"})
-    pid5 = rr.json()["id"]
+    tok = token_for("ananya")
+    pid5 = ctx.request.post(f"{BASE}/api/projects", headers={"Authorization": "Bearer " + tok},
+                            data={"title": "Phone Test Product", "ptype": "development", "market": "AU"}).json()["id"]
     m.goto(BASE)
     m.evaluate("t => localStorage.setItem('neo_token', t)", tok)
     m.goto(f"{BASE}/projects/{pid5}")
     m.wait_for_selector(".nowcard.mine")
-    m.screenshot(path=f"{OUT}/J1_phone_task.png")
-    assert m.evaluate("document.documentElement.scrollWidth - document.documentElement.clientWidth") == 0
+    m.screenshot(path=f"{OUT}/K1_phone_task.png")
+    assert m.evaluate("document.documentElement.scrollWidth - document.documentElement.clientWidth") <= 0
+    for _ in range(3):
+        m.locator(".tick:not(.on)").first.tap()
     m.locator(".nowcard .act-buttons .btn.ok").tap()
-    expect(m.locator(".nowcard h2")).to_have_text("Commercial Validation")
+    expect(m.locator(".nowcard.mine h2")).to_have_text("Commercial Validation")
     m.locator(".tabbar").get_by_text("Home").tap()
     m.wait_for_selector(".hero")
-    m.screenshot(path=f"{OUT}/J2_phone_home.png")
-    ok("on a phone: open task, tap the big button, bottom tabs work, no sideways scrolling")
+    m.screenshot(path=f"{OUT}/K2_phone_home.png")
+    ok("on a phone: tick, tap the big button, bottom tabs, no sideways scrolling")
 
     print("\nconsole/page errors:", errors)
     assert not errors, errors
     with open(f"{OUT}/result.txt", "w", encoding="utf8") as f:
-        f.write("\n".join("PASS " + m for m in log))
+        f.write("\n".join("PASS " + x for x in log))
     print("\nALL %d CHECKS PASSED" % len(log))
     browser.close()

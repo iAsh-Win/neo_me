@@ -65,3 +65,14 @@ NEO_URL=http://localhost:8090 python e2e/ui_journey.py   # 34 browser checks, wh
 
 See **[AUDIT.md](AUDIT.md)** for the requirement-by-requirement check, and **[docs/WORKFLOW_RESEARCH.md](docs/WORKFLOW_RESEARCH.md)**
 for the research.
+
+## Deployed copy (VPS)
+
+Live at **http://200.141.0.195:8120** (demo password for every demo user: `neo@123`).
+It is fully separate from the other apps on that server: own folder `/opt/neo-projectflow`, own system user
+`neoflow`, own service `neoflow-api` (127.0.0.1:9120), own nginx file `neo-projectflow` (port 8120), own data folder.
+
+Update: build the screens (`cd frontend && npm run build`), pack `backend/app`, `backend/requirements.txt` and
+`frontend/dist` into `/tmp/neoflow.tgz`, copy it and `deploy/setup_vps.sh` to the server and run the script
+(it keeps the existing `.env` and data), then `systemctl restart neoflow-api`.
+To reset to the demo data: stop the service, empty `/opt/neo-projectflow/data`, start it again.
